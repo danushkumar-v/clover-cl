@@ -1,0 +1,5 @@
+dataset_name: cub200
+init_cls: 20
+increment: 20
+shuffle_seed: 1993
+data_root: ./data

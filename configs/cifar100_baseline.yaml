@@ -1,0 +1,6 @@
+dataset_name: cifar100
+init_cls: 10
+increment: 10
+shuffle_seed: 1993
+data_root: ./data
+# overlap_spec is absent → strict PILOT-equivalent disjoint partitioning
