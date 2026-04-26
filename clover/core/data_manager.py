@@ -146,6 +146,7 @@ class OverlapDataManager:
         shuffle_seed: int = 1993,
         data_root: str = "./data",
         test_overlap_strategy: str = "duplicate",
+        preserve_task_size: bool = True,
     ) -> None:
         self.dataset_name = dataset_name
         self.init_cls = init_cls
@@ -154,6 +155,7 @@ class OverlapDataManager:
         self.shuffle_seed = shuffle_seed
         self.data_root = data_root
         self.test_overlap_strategy = test_overlap_strategy
+        self.preserve_task_size = preserve_task_size
 
         # Validate spec if given
         if overlap_spec is not None:
@@ -208,6 +210,7 @@ class OverlapDataManager:
             increment=increment,
             class_order=self._class_order,
             overlap_spec=effective_spec,
+            preserve_size=preserve_task_size,
         )
         self._increments: List[int] = [len(t) for t in self._task_class_lists]
 
