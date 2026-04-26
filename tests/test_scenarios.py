@@ -105,6 +105,47 @@ def test_symmetric_pair_validates():
 
 
 # ---------------------------------------------------------------------------
+# Seeded sampling: different seeds → different shared classes; same seed → same
+# ---------------------------------------------------------------------------
+
+def test_partial_overlap_different_seeds_different_shared():
+    spec1 = partial_overlap.build_spec(TOTAL, INIT, INC, pair=(0, 5), overlap_fraction=0.5, seed=1)
+    spec2 = partial_overlap.build_spec(TOTAL, INIT, INC, pair=(0, 5), overlap_fraction=0.5, seed=2)
+    assert spec1.pairs[0].shared_classes != spec2.pairs[0].shared_classes
+
+
+def test_partial_overlap_same_seed_reproducible():
+    spec1 = partial_overlap.build_spec(TOTAL, INIT, INC, pair=(0, 5), overlap_fraction=0.5, seed=7)
+    spec2 = partial_overlap.build_spec(TOTAL, INIT, INC, pair=(0, 5), overlap_fraction=0.5, seed=7)
+    assert spec1.pairs[0].shared_classes == spec2.pairs[0].shared_classes
+
+
+def test_symmetric_pair_different_seeds_different_shared():
+    spec1 = symmetric_pair.build_spec(TOTAL, INIT, INC, pair=(0, 1), seed=1)
+    spec2 = symmetric_pair.build_spec(TOTAL, INIT, INC, pair=(0, 1), seed=2)
+    assert spec1.pairs[0].shared_classes != spec2.pairs[0].shared_classes
+
+
+def test_symmetric_pair_same_seed_reproducible():
+    spec1 = symmetric_pair.build_spec(TOTAL, INIT, INC, pair=(0, 1), seed=99)
+    spec2 = symmetric_pair.build_spec(TOTAL, INIT, INC, pair=(0, 1), seed=99)
+    assert spec1.pairs[0].shared_classes == spec2.pairs[0].shared_classes
+
+
+def test_hierarchical_fallback_different_seeds_different_shared():
+    # No hierarchy_map → uses fallback seeded sampling
+    spec1 = hierarchical.build_spec(TOTAL, INIT, INC, pair=(0, 1), seed=1)
+    spec2 = hierarchical.build_spec(TOTAL, INIT, INC, pair=(0, 1), seed=2)
+    assert spec1.pairs[0].shared_classes != spec2.pairs[0].shared_classes
+
+
+def test_hierarchical_fallback_same_seed_reproducible():
+    spec1 = hierarchical.build_spec(TOTAL, INIT, INC, pair=(0, 1), seed=5)
+    spec2 = hierarchical.build_spec(TOTAL, INIT, INC, pair=(0, 1), seed=5)
+    assert spec1.pairs[0].shared_classes == spec2.pairs[0].shared_classes
+
+
+# ---------------------------------------------------------------------------
 # Downstream overlap matrix shape/value checks
 # ---------------------------------------------------------------------------
 

@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 
 from clover.core.overlap_spec import ImageSplit, OverlapPair, OverlapSpec
 from clover.core.task_builder import compute_increments
+from clover.utils.seeding import get_rng
 
 
 def build_spec(
@@ -71,9 +72,11 @@ def build_spec(
                 "Check that parent_ids have children spanning both tasks."
             )
     else:
-        # Fallback: share first half of task_a's classes
+        # Fallback: sample half of task_a's classes using the scenario seed
         task_a_list = sorted(task_a_classes)
-        shared = task_a_list[: max(1, len(task_a_list) // 2)]
+        n_shared = max(1, len(task_a_list) // 2)
+        rng = get_rng(seed)
+        shared = sorted(rng.choice(task_a_list, size=n_shared, replace=False).tolist())
 
     shared = sorted(set(shared))
     pair_obj = OverlapPair(tasks=(t_a, t_b), shared_classes=shared)

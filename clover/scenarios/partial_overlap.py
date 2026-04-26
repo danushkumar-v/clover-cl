@@ -6,6 +6,7 @@ from typing import Tuple
 
 from clover.core.overlap_spec import ImageSplit, OverlapPair, OverlapSpec
 from clover.core.task_builder import compute_increments
+from clover.utils.seeding import get_rng
 
 
 def build_spec(
@@ -46,13 +47,11 @@ def build_spec(
         if t < 0 or t >= nb_tasks:
             raise ValueError(f"Task index {t} out of range [0, {nb_tasks - 1}].")
 
-    # Shared classes are the first floor(overlap_fraction * init_cls) from task_a
-    # (in remapped space, task_a starts at 0 if t_a=0)
-    task_a_start = init_cls if t_a == 0 else init_cls + (t_a - 1) * increment
     task_a_start = sum(increments[:t_a])
     task_a_classes = list(range(task_a_start, task_a_start + increments[t_a]))
     n_shared = max(1, int(len(task_a_classes) * overlap_fraction))
-    shared = task_a_classes[:n_shared]
+    rng = get_rng(seed)
+    shared = sorted(rng.choice(task_a_classes, size=n_shared, replace=False).tolist())
 
     pair_obj = OverlapPair(tasks=(t_a, t_b), shared_classes=shared)
     spec = OverlapSpec(
