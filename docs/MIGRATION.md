@@ -1,5 +1,9 @@
 # Migration Guide
 
+> If you are coming from CIR or Avalanche directly, CLOVER's API is
+> intentionally smaller and PILOT-shaped. For full-featured CL
+> research tooling, those libraries remain the canonical choice.
+
 For users coming from CLOVER v0.1 or from LAMDA-PILOT.
 
 ---

@@ -2,19 +2,39 @@
 
 ## Why this module exists
 
-This directory holds the data structures that make CLOVER novel. The `OverlapDataManager` (v0.1 engine) is a solid drop-in for PILOT, but it exposes a raw Dataset — no metadata, no stream context, no revisit information. The classes added in v0.2 (`Experience`, `Stream`, `Benchmark`, `StreamSpec`, `stream_builder`) form a self-describing temporal abstraction layer on top of it. Anyone reviewing the design should start here.
+The `OverlapDataManager` (v0.1 engine) is a drop-in replacement for PILOT's `DataManager`, but it exposes a raw Dataset — no metadata, no stream context, no revisit information. The classes added in v0.2 (`Experience`, `Stream`, `Benchmark`, `StreamSpec`, `stream_builder`) form a self-describing temporal abstraction layer on top of it.
 
-## The novelty in one paragraph
+## What this module provides
 
-CLOVER v0.2 is the first CL benchmark library combining all three of: **(a)** configurable class revisits with controlled image-overlap strategies (disjoint / duplicate / partial-duplicate), **(b)** declarative stream specifications that describe statistical structure rather than exact task-pair assignments — enabling proper multi-seed error bars, and **(c)** self-describing Experience objects that carry revisit metadata so that overlap-aware metrics are one-liners. This combination does not exist in PILOT, Avalanche, PyCIL, or TOSCA.
+This directory contains CLOVER's data-flow primitives:
 
-| Feature | PILOT | PyCIL | Avalanche | CLOVER v0.2 |
-|---|:---:|:---:|:---:|:---:|
-| Class revisits | — | — | Partial | ✓ |
-| Image-overlap strategies | — | — | — | ✓ |
-| Declarative stream spec | — | — | — | ✓ |
-| Multi-seed statistical structure | — | — | — | ✓ |
-| Revisit metadata on experience | — | — | — | ✓ |
+- `data_manager.py` — PILOT-compatible engine (legacy API, preserved
+  for drop-in compatibility with PILOT/TOSCA training loops).
+- `experience.py`, `stream.py`, `benchmark.py` — modern user-facing
+  API. These mirror the Stream/Experience abstraction popularised by
+  [Avalanche](https://github.com/ContinualAI/avalanche). They are
+  not novel; they exist here to keep CLOVER self-contained without
+  pulling in the full Avalanche stack, which is heavy for users who
+  only need PILOT-compatible CIR extensions.
+- `stream_spec.py`, `stream_builder.py` — declarative spec layer
+  that compiles a high-level `StreamSpec` into the underlying
+  OverlapSpec. The control-parameter style is conceptually similar
+  to [CIR's Gslot/Gsamp generators](https://github.com/HamedHemati/CIR);
+  CLOVER's variant adds image-level overlap modes (disjoint /
+  duplicate / partial_duplicate).
+
+| If you want to... | Use |
+|---|---|
+| Run pure PILOT/TOSCA experiments unchanged | `OverlapDataManager(overlap_spec=None)` |
+| Add controlled class revisits to PILOT/TOSCA pipelines | `OverlapDataManager(overlap_spec=...)` or `build_benchmark(StreamSpec(...))` |
+| Run CIR experiments on CIFAR-100 / Tiny-ImageNet only | Use [CIR](https://github.com/HamedHemati/CIR) directly — that's its native habitat |
+| Use the full Avalanche ecosystem (loggers, strategies, metrics) | Use [Avalanche](https://github.com/ContinualAI/avalanche) directly |
+| Run CIR-style experiments on CUB-200, ImageNet-R, OmniBench, VTAB | CLOVER (this is the gap CLOVER fills) |
+| Distinguish same-class-same-images from same-class-different-images | CLOVER's image-level overlap modes |
+
+## Relation to prior work
+
+See the main [README's "Relation to prior work" section](../../README.md#-relation-to-prior-work) for citations to CIR (Hemati et al. 2023), Avalanche (Carta et al. 2023), and i-Blurry/Si-Blurry.
 
 ## The Stream/Experience model
 

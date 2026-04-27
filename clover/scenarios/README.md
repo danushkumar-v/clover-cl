@@ -57,3 +57,13 @@ of a stable core concept while the surrounding context changes.
 ### `symmetric_pair`
 Tasks M and N share exactly 50% of their classes; each retains 50% unique
 classes. Provides a clean controlled overlap baseline for ablation studies.
+
+---
+
+## Scope and routing
+
+The scenarios provided are presets useful for studying GRAFT-like
+methods. They are not exhaustive — for the full statistical
+parameter space of CIR streams (Pf, Pr distributions over arbitrary
+families), use [CIR's generators](https://github.com/HamedHemati/CIR)
+directly.

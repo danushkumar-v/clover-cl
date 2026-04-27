@@ -112,28 +112,39 @@ inconsistent Experience.
 
 ---
 
-## 5. How CLOVER differs from PILOT, Avalanche, and PyCIL
+## 5. How CLOVER fits in the CL benchmark landscape
 
-**PILOT / TOSCA** — Excellent CL toolboxes with clean training pipelines and
-many reproduced methods. CLOVER's `OverlapDataManager` is API-compatible with
-PILOT's `DataManager` (same class-ordering, same task splits when
-`overlap_spec=None`). PILOT does not support class revisits, does not have a
-stream abstraction, and does not expose revisit metadata.
+Continual-learning benchmarks have evolved through several waves:
 
-**Avalanche** — Large, mature CL framework with a stream abstraction
-(`AvalancheDataset`, `GenericExperienceStream`). Avalanche supports some forms
-of data augmentation and class-incremental scenarios but does not provide
-controlled class revisit with configurable image-overlap strategies or
-declarative revisit specifications. Its experience objects do not carry
-revisit-specific metadata.
+1. **Disjoint class-incremental** (Split-MNIST, Split-CIFAR, PILOT).
+   Each class appears in exactly one task. Most CL papers use this.
+2. **Repetition-aware** (CIR, Hemati et al. 2023; i-Blurry, Si-Blurry).
+   Classes can recur across the stream, controlled by interpretable
+   parameters. This is the wave CLOVER lives in.
+3. **Domain-incremental and online** (CORe50-NIC, CLAD, online OCL).
+   Different axis; not CLOVER's focus.
 
-**PyCIL** — Clean implementation of class-incremental algorithms. Data
-management is similar to PILOT — task-based random access, no stream
-abstraction, no revisit support.
+CLOVER's specific niche within the repetition-aware wave is:
+PTM-era benchmark coverage (CUB-200, ImageNet-R, OmniBenchmark, VTAB,
+ImageNet-A) plus PILOT drop-in compatibility plus image-level overlap modes
+(disjoint / duplicate / partial_duplicate).
 
-**CLOVER v0.2** — Designed specifically to make class-revisit experiments
-first-class: declarative specs, multi-seed support, and Experience objects
-that make overlap-aware metrics trivial to compute.
+CLOVER is **not** the first library to support class revisits or stream-based
+CL benchmarks. The canonical prior work is:
+
+- **CIR** ([Hemati et al., CoLLAs 2023](https://arxiv.org/abs/2301.11396)) —
+  stochastic CIR stream generators with interpretable control parameters,
+  integrated with Avalanche. If your work targets CIFAR-100 or Tiny-ImageNet
+  without needing PILOT compatibility, use CIR directly.
+- **Avalanche** ([Carta et al., JMLR 2023](https://www.jmlr.org/papers/v24/22-1280.html)) —
+  the canonical Stream/Experience abstraction. CLOVER's stream model mirrors
+  Avalanche's design but is self-contained to avoid the full Avalanche dependency.
+- **i-Blurry / Si-Blurry** ([Koh et al., ICLR 2022](https://arxiv.org/abs/2110.10031);
+  [Moon et al., ICCV 2023](https://arxiv.org/abs/2308.09303)) — class overlap
+  via "blurry task boundary" scenarios.
+
+CLOVER's contribution relative to these is **infrastructure**: PILOT API
+compatibility, PTM benchmark coverage, and image-level overlap control.
 
 ---
 

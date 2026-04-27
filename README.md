@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="#-what-is-clover">🎉 What is CLOVER?</a> •
+  <a href="#-relation-to-prior-work">📚 Prior Work</a> •
   <a href="#-quickstart-modern-api">☄️ Quickstart</a> •
   <a href="#-two-apis">⚖️ Two APIs</a> •
   <a href="#-key-concepts">📖 Key Concepts</a> •
@@ -24,14 +25,63 @@
 
 ## 🎉 What is CLOVER?
 
-CLOVER is a continual learning benchmark library where classes are **allowed to revisit across tasks**. It is a drop-in replacement for [LAMDA-PILOT](https://github.com/sun-hailong/LAMDA-PILOT)'s `DataManager` that adds two things on top of standard class-incremental learning benchmarks:
+CLOVER is a continual-learning benchmark library that adds configurable
+class overlap to the pre-trained-model CL benchmark suite (CIFAR-100,
+CUB-200, ImageNet-R, ImageNet-A, OmniBenchmark, VTAB). It is a drop-in
+replacement for [LAMDA-PILOT](https://github.com/sun-hailong/LAMDA-PILOT)'s
+`DataManager`, so PILOT and TOSCA training loops work unchanged.
 
-1. **Configurable class overlap** — choose exactly which classes revisit, how often, with what image-level strategy (disjoint, duplicate, or partial-duplicate pools).
-2. **A declarative stream API** — describe *what should happen statistically* ("5 classes revisit, placed randomly, min gap 3") and the framework resolves the concrete placement seeded by `stream_seed`. Different seeds → different streams, same statistical structure → proper multi-seed error bars.
+CLOVER builds on the Class-Incremental with Repetition (CIR) framework
+introduced by [Hemati et al. (2023)](https://arxiv.org/abs/2301.11396),
+extending it to the PTM-era benchmark suite and adding explicit
+image-level overlap modes (disjoint / duplicate / partial_duplicate)
+needed to study methods that distinguish "same class, same images"
+from "same class, different images."
 
 > New to the Stream/Experience model? Read
 > [`clover/core/README.md`](clover/core/README.md) for a quick tour
 > or [`docs/CONCEPTS.md`](docs/CONCEPTS.md) for the full explanation.
+
+---
+
+## 📚 Relation to prior work
+
+CLOVER is **not** the first library to support class revisits or
+stream-based CL benchmarks. Several established projects already
+cover this ground:
+
+- **CIR** ([Hemati et al., CoLLAs 2023](https://arxiv.org/abs/2301.11396),
+  [code](https://github.com/HamedHemati/CIR)) introduced two stochastic
+  stream generators (Gslot, Gsamp) that produce CIR scenarios from any
+  classification dataset using interpretable control parameters
+  (first-occurrence distribution, repetition probability). CIR is
+  integrated with Avalanche.
+- **Avalanche** ([Lomonaco et al., 2021](https://arxiv.org/abs/2104.00405);
+  [Carta et al., JMLR 2023](https://www.jmlr.org/papers/v24/22-1280.html))
+  provides the canonical Stream + Experience abstraction with per-experience
+  metadata (`classes_in_this_experience`, `task_labels`, etc.).
+- **i-Blurry / Si-Blurry** ([Koh et al., ICLR 2022](https://arxiv.org/abs/2110.10031);
+  [Moon et al., ICCV 2023](https://arxiv.org/abs/2308.09303)) address
+  class overlap via "blurry task boundary" scenarios.
+
+What CLOVER adds on top is **infrastructure**, not paradigm:
+
+- **Drop-in PILOT compatibility.** When `overlap_spec=None`, CLOVER
+  produces byte-identical task splits to PILOT (seed-1993 verified),
+  so PILOT/TOSCA pipelines run unchanged.
+- **PTM benchmark coverage.** Prior CIR work targets CIFAR-100 and
+  Tiny-ImageNet. CLOVER covers the full PTM suite: CUB-200, ImageNet-R,
+  ImageNet-A, OmniBenchmark, VTAB.
+- **Image-level overlap modes.** Three explicit strategies for shared
+  classes — disjoint (no image in two tasks), duplicate (all images
+  in both), partial_duplicate (configurable overlap fraction) — useful
+  for methods that care about same-image vs. same-class repetition.
+- **Reproducibility manifests.** Every run can be frozen to a JSON
+  manifest recording exact image-to-task assignments.
+
+If your work does not need PTM benchmark coverage or PILOT drop-in
+compatibility, **use CIR or Avalanche directly** — those are the
+canonical libraries for CL with class repetition.
 
 ---
 
@@ -87,7 +137,7 @@ print(dm.nb_tasks, dm.get_task_classes(0))
 
 **Stream** — An ordered sequence of Experiences representing a temporal CL training sequence. → deep dive: [docs/CONCEPTS.md](docs/CONCEPTS.md#2-random-access-task-lookup-vs-temporal-stream)
 
-**Experience** — One step in a Stream. A Dataset *plus* EXIF-like metadata: which classes are revisiting, which are new, how this experience overlaps with previous ones. → implementation: [clover/core/README.md](clover/core/README.md#what-an-experience-carries)
+**Experience** — One step in a Stream. A Dataset *plus* metadata: which classes are revisiting, which are new, how this experience overlaps with previous ones. → implementation: [clover/core/README.md](clover/core/README.md#what-an-experience-carries)
 
 **StreamSpec** — A declarative description of stream structure. Specifies what revisits should happen and how they should be placed; the framework resolves concrete task-pair assignments from the spec and `stream_seed`. → [docs/CONCEPTS.md](docs/CONCEPTS.md#3-task-pair-declaration-vs-declarative-stream-spec)
 
@@ -175,7 +225,8 @@ pytest tests/ --cov=clover --cov-report=term   # coverage ≥ 87%
 
 ## 📜 Citation
 
-If you use CLOVER in your research, please cite:
+If you use CLOVER, please cite both this repository and the foundational
+CIR work it builds upon:
 
 ```bibtex
 @software{clover2026,
@@ -184,14 +235,43 @@ If you use CLOVER in your research, please cite:
   year    = {2026},
   url     = {https://github.com/danushkumar-v/clover-cl},
 }
+
+@inproceedings{hemati2023class,
+  title     = {Class-Incremental Learning with Repetition},
+  author    = {Hemati, Hamed and Cossu, Andrea and Carta, Antonio and
+               Hurtado, Julio and Pellegrini, Lorenzo and Bacciu, Davide
+               and Lomonaco, Vincenzo and Borth, Damian},
+  booktitle = {Proceedings of The 2nd Conference on Lifelong Learning Agents},
+  pages     = {437--455},
+  year      = {2023},
+  publisher = {PMLR},
+  volume    = {232},
+}
+
+@article{carta2023avalanche,
+  title   = {Avalanche: A {PyTorch} Library for Deep Continual Learning},
+  author  = {Carta, Antonio and Pellegrini, Lorenzo and Cossu, Andrea
+             and Hemati, Hamed and Lomonaco, Vincenzo},
+  journal = {Journal of Machine Learning Research},
+  volume  = {24},
+  number  = {363},
+  pages   = {1--6},
+  year    = {2023},
+}
 ```
 
 ---
 
 ## 👨‍🏫 Acknowledgments
 
-CLOVER builds on top of the following open-source projects:
+CLOVER stands on prior work in continual-learning benchmarks:
 
-- [LAMDA-PILOT](https://github.com/sun-hailong/LAMDA-PILOT) — Pre-trained model-based CL toolbox whose DataManager API CLOVER mirrors
-- [TOSCA](https://github.com/AAAI-25-TOSCA/TOSCA) — CL toolbox built on PILOT
-- [PyCIL](https://github.com/G-U-N/PyCIL) — Class-incremental learning toolbox
+- [CIR (Hemati et al., 2023)](https://github.com/HamedHemati/CIR)
+  — the conceptual parent of CLOVER's revisit framework.
+- [Avalanche](https://github.com/ContinualAI/avalanche) — the canonical
+  Stream/Experience abstraction in CL.
+- [LAMDA-PILOT](https://github.com/sun-hailong/LAMDA-PILOT) — the
+  DataManager API CLOVER preserves.
+- [TOSCA](https://github.com/AAAI-25-TOSCA/TOSCA) — the immediate
+  downstream use-case driving CLOVER's design.
+- [PyCIL](https://github.com/G-U-N/PyCIL) — class-incremental learning toolbox.
