@@ -3,164 +3,118 @@
 </p>
 
 <p align="center">
-  <a href="#-introduction">🎉 Introduction</a> •
-  <a href="#-overlap-scenarios">🌟 Overlap Scenarios</a> •
-  <a href="#%EF%B8%8F-how-to-use">☄️ How to Use</a> •
+  <a href="#-what-is-clover">🎉 What is CLOVER?</a> •
+  <a href="#-quickstart-modern-api">☄️ Quickstart</a> •
+  <a href="#-two-apis">⚖️ Two APIs</a> •
+  <a href="#-key-concepts">📖 Key Concepts</a> •
+  <a href="#-overlap-scenarios">🌟 Scenarios</a> •
   <a href="#-datasets">🔎 Datasets</a> •
-  <a href="#-acknowledgments">👨‍🏫 Acknowledgments</a> •
-  <a href="#-contact">🤗 Contact</a>
+  <a href="#-reproducibility">🔁 Reproducibility</a> •
+  <a href="#-citation">📜 Citation</a>
 </p>
 
 ---
 
 <p align="center">
-  <a href=""><img src="https://img.shields.io/badge/CLOVER-v0.1.0-darkcyan"></a>
+  <a href=""><img src="https://img.shields.io/badge/CLOVER-v0.2.0-darkcyan"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.10%2B-blue"></a>
   <a href=""><img src="https://img.shields.io/badge/pytorch-2.0%2B-orange"></a>
   <a href=""><img src="https://black.readthedocs.io/en/stable/_static/license.svg"></a>
 </p>
 
-## 🎉 Introduction
+## 🎉 What is CLOVER?
 
-Welcome to **CLOVER**, a continual learning benchmark library where classes are **allowed to revisit across tasks**. CLOVER is a drop-in replacement for [LAMDA-PILOT](https://github.com/sun-hailong/LAMDA-PILOT)'s `DataManager` that adds configurable, reproducible **class overlap** on top of standard class-incremental learning benchmarks.
+CLOVER is a continual learning benchmark library where classes are **allowed to revisit across tasks**. It is a drop-in replacement for [LAMDA-PILOT](https://github.com/sun-hailong/LAMDA-PILOT)'s `DataManager` that adds two things on top of standard class-incremental learning benchmarks:
 
-Standard CL benchmarks enforce **strict disjoint** task partitions — once a class appears in Task 0, it never appears again. Real-world streaming data does not work that way. CLOVER makes overlap **controlled and reproducible**:
+1. **Configurable class overlap** — choose exactly which classes revisit, how often, with what image-level strategy (disjoint, duplicate, or partial-duplicate pools).
+2. **A declarative stream API** — describe *what should happen statistically* ("5 classes revisit, placed randomly, min gap 3") and the framework resolves the concrete placement seeded by `stream_seed`. Different seeds → different streams, same statistical structure → proper multi-seed error bars.
 
-```
-# Standard CL (PILOT / TOSCA)
-Task 0: classes {0, 1, 2, 3, 4}
-Task 1: classes {5, 6, 7, 8, 9}   ← "cat" never revisited
+> New to the Stream/Experience model? Read
+> [`clover/core/README.md`](clover/core/README.md) for a quick tour
+> or [`docs/CONCEPTS.md`](docs/CONCEPTS.md) for the full explanation.
 
-# CLOVER with partial_overlap
-Task 0: classes {0, 1, 2, 3, 4}
-Task 5: classes {2, 3, 8, 9, 10}  ← classes 2 & 3 revisit
-```
+---
 
-When `overlap_spec=None`, CLOVER produces **identical class orderings** to PILOT (seed-1993 verified), making it a zero-cost drop-in for existing pipelines.
+## ☄️ Quickstart (modern API)
 
-## 🌟 Overlap Scenarios
+```python
+from clover import build_benchmark, StreamSpec, RevisitSpec
 
-CLOVER ships 8 built-in scenarios covering the major ways classes can revisit:
+spec = StreamSpec(
+    dataset="cifar100",
+    init_cls=10,
+    increment=10,
+    revisits=[RevisitSpec(classes=[3, 7, 22], times=1,
+                          placement="random", min_gap=3)],
+    stream_seed=42,
+)
+bench = build_benchmark(spec)
 
-| Scenario | Module | Description |
-|---|---|---|
-| `exact_replay` | `clover.scenarios.exact_replay` | Task N's classes are identical to Task 0's classes — tests pure catastrophic forgetting |
-| `partial_overlap` | `clover.scenarios.partial_overlap` | A configurable fraction of Task N's classes appear in an earlier task |
-| `hierarchical` | `clover.scenarios.hierarchical` | Classes sharing a taxonomic parent are distributed across tasks |
-| `distribution_shift` | `clover.scenarios.distribution_shift` | Same classes appear in multiple tasks from different feature distributions |
-| `near_miss` | `clover.scenarios.near_miss` | Tasks share no classes but contain visually adjacent classes (wolf/husky) |
-| `long_range_revisit` | `clover.scenarios.long_range_revisit` | Task 0 and Task T−1 share classes; intermediate tasks are unrelated |
-| `cumulative_drift` | `clover.scenarios.cumulative_drift` | Class set grows cumulatively; anchor classes appear in every task |
-| `symmetric_pair` | `clover.scenarios.symmetric_pair` | Tasks M and N share 50% classes; each has 50% unique classes |
-
-## ☄️ How to Use
-
-### 🕹️ Clone
-
-```bash
-git clone https://github.com/danushkumar-v/clover-cl
-cd clover-cl
+for exp in bench.train_stream:
+    print(exp.task_label,
+          exp.classes_in_this_experience,
+          "revisits:", exp.revisiting_classes)
 ```
 
-### 🗂️ Dependencies
-
-1. [torch ≥ 2.0](https://github.com/pytorch/pytorch)
-2. [torchvision ≥ 0.15](https://github.com/pytorch/vision)
-3. [numpy ≥ 1.24](https://github.com/numpy/numpy)
-4. [Pillow ≥ 10.0](https://github.com/python-pillow/Pillow)
-5. [PyYAML ≥ 6.0](https://github.com/yaml/pyyaml)
-6. [matplotlib](https://matplotlib.org/) *(optional — for visualisations)*
-
-Install in editable mode (recommended for research):
-
-```bash
-pip install -e .[dev]
-```
-
-### 🔑 Quickstart
-
-**Baseline — identical to PILOT (no overlap):**
+## ☄️ Quickstart (legacy / drop-in API)
 
 ```python
 from clover import OverlapDataManager
 
+# overlap_spec=None → identical class order to PILOT, seed 1993
 dm = OverlapDataManager("cifar100", init_cls=10, increment=10)
-# overlap_spec=None → same class order as PILOT with seed=1993
 
 train_set = dm.get_dataset(task_id=0, source="train", mode="train")
 test_set  = dm.get_dataset(task_id=0, source="test",  mode="test")
+print(dm.nb_tasks, dm.get_task_classes(0))
 ```
 
-**With overlap — partial_overlap scenario:**
+---
 
-```python
-from clover import OverlapDataManager
-from clover.scenarios import partial_overlap
+## ⚖️ Two APIs — when to use which
 
-spec = partial_overlap.build_spec(
-    total_classes=100, init_cls=10, increment=10,
-    pair=(0, 5), overlap_fraction=0.5,
-)
-dm = OverlapDataManager("cifar100", init_cls=10, increment=10, overlap_spec=spec)
+| | Modern (`build_benchmark`) | Legacy (`OverlapDataManager`) |
+|---|---|---|
+| **Recommended for** | New research, multi-seed experiments, overlap-aware metrics | Direct PILOT/TOSCA compatibility, low-level engine access |
+| **Overlap config** | Declarative `StreamSpec` — describe structure, not exact pairs | Explicit `OverlapSpec` — declare exact task pairs |
+| **Multi-seed support** | Yes — vary `stream_seed` | No — placement is fixed |
+| **Revisit metadata** | Per-`Experience` (revisiting_classes, overlap_with_previous, …) | Not exposed |
+| **PILOT-equivalent baseline** | `StreamSpec(revisits=[])` | `OverlapDataManager(overlap_spec=None)` |
 
-# DataLoader — yields (sample_idx, image, remapped_label) like PILOT's DummyDataset
-import torch
-loader = torch.utils.data.DataLoader(
-    dm.get_dataset(task_id=0, source="train", mode="train"),
-    batch_size=32, shuffle=True,
-)
-for sample_idx, images, labels in loader:
-    ...
-```
+---
 
-**Visualise and inspect:**
+## 📖 Key Concepts
 
-```python
-from clover.utils.visualizer import plot_overlap_matrix, plot_class_frequency
+**Stream** — An ordered sequence of Experiences representing a temporal CL training sequence. → deep dive: [docs/CONCEPTS.md](docs/CONCEPTS.md#2-random-access-task-lookup-vs-temporal-stream)
 
-plot_overlap_matrix(dm, "overlap_matrix.png")
-plot_class_frequency(dm, "class_freq.png")
-print(dm.get_overlap_matrix())   # numpy array, shape (T, T)
-```
+**Experience** — One step in a Stream. A Dataset *plus* EXIF-like metadata: which classes are revisiting, which are new, how this experience overlaps with previous ones. → implementation: [clover/core/README.md](clover/core/README.md#what-an-experience-carries)
 
-**CLI:**
+**StreamSpec** — A declarative description of stream structure. Specifies what revisits should happen and how they should be placed; the framework resolves concrete task-pair assignments from the spec and `stream_seed`. → [docs/CONCEPTS.md](docs/CONCEPTS.md#3-task-pair-declaration-vs-declarative-stream-spec)
 
-```bash
-python -m clover.cli inspect configs/cifar100_partial.yaml
-```
+**RevisitSpec** — A single revisit pattern inside a `StreamSpec`: which classes, how many times, where to place them. → [docs/CONCEPTS.md](docs/CONCEPTS.md#4-the-experience-object)
 
-### 🔧 Key Parameters
+---
 
-When configuring CLOVER, the main parameters are:
+## 🌟 Overlap Scenarios
 
-- **`dataset_name`**: One of `cifar100`, `cub200`, `imagenet_r`, `imagenet_a`, `omnibenchmark`, `vtab`.
-- **`init_cls`**: Number of classes in the initial (Task 0) stage.
-- **`increment`**: Number of new classes added per subsequent task. Matches PILOT's convention.
-- **`shuffle_seed`**: Random seed for class order permutation. Default `1993` — matches PILOT's iCaRL benchmark baseline.
-- **`overlap_spec`**: An `OverlapSpec` object (or `None` for PILOT-identical disjoint splits). Built via scenario helpers or directly.
-- **`data_root`**: Root directory where datasets are stored. Default `./data`.
+Each scenario ships two helpers:
+- `build_spec(...)` — returns an `OverlapSpec` (legacy / low-level API)
+- `build_stream_spec(...)` — returns a `StreamSpec` (modern API)
 
-### 📋 Reproducibility via Manifest
+| Scenario | Module | Description | Stream-spec helper |
+|---|---|---|---|
+| `exact_replay` | `clover.scenarios.exact_replay` | Task N's classes are identical to Task 0's classes | `exact_replay.build_stream_spec` |
+| `partial_overlap` | `clover.scenarios.partial_overlap` | A configurable fraction of Task N's classes appear in an earlier task | `partial_overlap.build_stream_spec` |
+| `hierarchical` | `clover.scenarios.hierarchical` | Classes sharing a taxonomic parent are distributed across tasks | `hierarchical.build_stream_spec` |
+| `distribution_shift` | `clover.scenarios.distribution_shift` | Same classes appear in multiple tasks from different feature distributions | `distribution_shift.build_stream_spec` |
+| `near_miss` | `clover.scenarios.near_miss` | Tasks share no classes but contain visually adjacent classes (wolf/husky) | `near_miss.build_stream_spec` |
+| `long_range_revisit` | `clover.scenarios.long_range_revisit` | Task 0 and Task T−1 share classes; intermediate tasks are unrelated | `long_range_revisit.build_stream_spec` |
+| `cumulative_drift` | `clover.scenarios.cumulative_drift` | Anchor classes appear in every task alongside new classes | `cumulative_drift.build_stream_spec` |
+| `symmetric_pair` | `clover.scenarios.symmetric_pair` | Tasks M and N share 50% classes; each retains 50% unique classes | `symmetric_pair.build_stream_spec` |
 
-Every run can be frozen to a JSON manifest — a record of exactly which image indices go to which task and class:
+See [`clover/scenarios/README.md`](clover/scenarios/README.md) for guidance on when to use each.
 
-```python
-dm.save_manifest("run_seed1993.json")
-
-# Reload in another script
-from clover.utils.manifest import load_manifest
-manifest = load_manifest("run_seed1993.json")
-# manifest[task_id][class_id] → list of image indices
-```
-
-### 🧪 Running Tests
-
-```bash
-pytest tests/ -v
-pytest tests/ --cov=clover --cov-report=term
-```
-
-All 109 tests pass; coverage is ≥ 86%.
+---
 
 ## 🔎 Datasets
 
@@ -171,25 +125,53 @@ All 109 tests pass; coverage is ≥ 86%.
 - **OmniBenchmark**: Google Drive: [link](https://drive.google.com/file/d/1AbCP3zBMtv_TDXJypOCnOgX8hJmvJm3u/view?usp=sharing) or Onedrive: [link](https://entuedu-my.sharepoint.com/:u:/g/personal/n2207876b_e_ntu_edu_sg/EcoUATKl24JFo3jBMnTV2WcBwkuyBH0TmCAy6Lml1gOHJA?e=eCNcoA)
 - **VTAB**: Google Drive: [link](https://drive.google.com/file/d/1xUiwlnx4k0oDhYi26KL5KwrCAya-mvJ_/view?usp=sharing) or Onedrive: [link](https://entuedu-my.sharepoint.com/:u:/g/personal/n2207876b_e_ntu_edu_sg/EQyTP1nOIH5PrfhXtpPgKQ8BlEFW2Erda1t7Kdi3Al-ePw?e=Yt4RnV)
 
-> Dataset links mirror the pre-processed subsets distributed by LAMDA-PILOT. These subsets are sampled from the original datasets. Download and unzip into your `data_root` directory (default `./data/`).
-
-After downloading, set the data path when constructing the manager:
+> Dataset links mirror the pre-processed subsets distributed by LAMDA-PILOT. Download and unzip into your `data_root` directory (default `./data/`).
 
 ```python
-dm = OverlapDataManager("cub200", init_cls=10, increment=10, data_root="/path/to/data")
+dm = OverlapDataManager("cub200", init_cls=20, increment=20, data_root="/path/to/data")
 ```
 
-## 👨‍🏫 Acknowledgments
+---
 
-CLOVER builds on top of the following open-source projects:
+## 🔁 Reproducibility
 
-- [LAMDA-PILOT](https://github.com/sun-hailong/LAMDA-PILOT) — Pre-trained model-based CL toolbox whose DataManager API CLOVER mirrors
-- [TOSCA](https://github.com/AAAI-25-TOSCA/TOSCA) — CL toolbox built on PILOT
-- [PyCIL](https://github.com/G-U-N/PyCIL) — Class-incremental learning toolbox
+CLOVER has **two independent seeds**:
 
-## 🤗 Contact
+- `shuffle_seed` (default 1993) — controls PILOT-compatible class-order permutation. Setting `shuffle_seed=1993` reproduces PILOT's benchmark class ordering exactly.
+- `stream_seed` — controls revisit placement and random class selection. Varying `stream_seed` produces different concrete streams with the same statistical structure.
 
-If you have questions or want to propose new scenarios, please open an issue on GitHub.
+**Manifest** — every run can be frozen:
+
+```python
+bench.save_manifest("run_seed42.json")
+# or for the engine directly:
+dm.save_manifest("run_baseline.json")
+```
+
+**Multi-seed experiment pattern:**
+
+```python
+results = []
+for seed in [1, 2, 3, 4, 5]:
+    spec = StreamSpec(
+        dataset="cifar100", init_cls=10, increment=10,
+        revisits=[RevisitSpec(classes=5, times=1, placement="random", min_gap=2)],
+        stream_seed=seed,
+    )
+    bench = build_benchmark(spec)
+    results.append(run_training(bench))  # your training loop
+```
+
+---
+
+## 🧪 Running Tests
+
+```bash
+pytest tests/ -v
+pytest tests/ --cov=clover --cov-report=term   # coverage ≥ 87%
+```
+
+---
 
 ## 📜 Citation
 
@@ -203,3 +185,13 @@ If you use CLOVER in your research, please cite:
   url     = {https://github.com/danushkumar-v/clover-cl},
 }
 ```
+
+---
+
+## 👨‍🏫 Acknowledgments
+
+CLOVER builds on top of the following open-source projects:
+
+- [LAMDA-PILOT](https://github.com/sun-hailong/LAMDA-PILOT) — Pre-trained model-based CL toolbox whose DataManager API CLOVER mirrors
+- [TOSCA](https://github.com/AAAI-25-TOSCA/TOSCA) — CL toolbox built on PILOT
+- [PyCIL](https://github.com/G-U-N/PyCIL) — Class-incremental learning toolbox
