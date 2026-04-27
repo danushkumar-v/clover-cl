@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 
 from clover.core.overlap_spec import ImageSplit, OverlapPair, OverlapSpec
 from clover.core.task_builder import compute_increments
+from clover.utils.seeding import get_rng
 
 
 def build_spec(
@@ -71,9 +72,11 @@ def build_spec(
                 "Check that parent_ids have children spanning both tasks."
             )
     else:
-        # Fallback: share first half of task_a's classes
+        # Fallback: sample half of task_a's classes using the scenario seed
         task_a_list = sorted(task_a_classes)
-        shared = task_a_list[: max(1, len(task_a_list) // 2)]
+        n_shared = max(1, len(task_a_list) // 2)
+        rng = get_rng(seed)
+        shared = sorted(rng.choice(task_a_list, size=n_shared, replace=False).tolist())
 
     shared = sorted(set(shared))
     pair_obj = OverlapPair(tasks=(t_a, t_b), shared_classes=shared)
@@ -85,3 +88,38 @@ def build_spec(
     )
     spec.validate()
     return spec
+
+
+def build_stream_spec(
+    total_classes: int,
+    init_cls: int,
+    increment: int,
+    n_revisit_classes: int = 3,
+    placement: str = "spaced",
+    min_gap: int = 2,
+    image_strategy: str = "duplicate",
+    stream_seed: int = 42,
+    shuffle_seed: int = 1993,
+    dataset: str = "cifar100",
+    data_root: str = "./data",
+):
+    """Return a :class:`~clover.core.stream_spec.StreamSpec` for hierarchical revisit."""
+    from clover.core.stream_spec import RevisitSpec, StreamSpec
+
+    return StreamSpec(
+        dataset=dataset,
+        init_cls=init_cls,
+        increment=increment,
+        revisits=[
+            RevisitSpec(
+                classes=n_revisit_classes,
+                times=1,
+                placement=placement,
+                min_gap=min_gap,
+            )
+        ],
+        image_strategy=image_strategy,
+        shuffle_seed=shuffle_seed,
+        stream_seed=stream_seed,
+        data_root=data_root,
+    )

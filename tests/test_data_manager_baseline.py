@@ -4,11 +4,15 @@ When overlap_spec=None and shuffle_seed=1993, the per-task class lists
 produced by CLOVER must EXACTLY match PILOT's DataManager with the same
 parameters. This is the drop-in-replacement contract.
 
-Expected class order for CIFAR100 with np.random.seed(1993):
-  np.random.seed(1993); np.random.permutation(100).tolist()
+Golden values are stored in tests/fixtures/pilot_class_orders.json and were
+captured by scripts/capture_pilot_fixtures.py using PILOT's exact RNG call:
+    np.random.seed(seed); np.random.permutation(n_classes).tolist()
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -16,12 +20,14 @@ import pytest
 from clover.core.data_manager import OverlapDataManager
 from clover.utils.seeding import pilot_class_order
 
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "pilot_class_orders.json"
 
-# Pre-computed from PILOT: np.random.seed(1993); np.random.permutation(100).tolist()
-# This is the authoritative expected value.
-def _expected_class_order() -> list:
-    np.random.seed(1993)
-    return np.random.permutation(100).tolist()
+
+def _load_fixture(key: str) -> dict:
+    with open(FIXTURE_PATH) as fh:
+        data = json.load(fh)
+    assert key in data, f"Fixture key {key!r} not found. Re-run scripts/capture_pilot_fixtures.py."
+    return data[key]
 
 
 @pytest.fixture
@@ -37,21 +43,40 @@ def baseline_manager(patched_cifar100):
 
 
 # ---------------------------------------------------------------------------
-# Class order equivalence
+# Class order equivalence — fixture-based golden check
 # ---------------------------------------------------------------------------
 
-def test_class_order_matches_pilot(baseline_manager):
-    expected = _expected_class_order()
-    # Only check the classes that actually exist in the synthetic 10-class dataset
-    # (positions 0..9 in the class order are the only valid remapped IDs)
-    assert baseline_manager._class_order == expected
+def test_class_order_matches_pilot_fixture(baseline_manager):
+    fixture = _load_fixture("cifar100__init10__inc10__seed1993")
+    assert baseline_manager._class_order == fixture["class_order"]
 
 
-def test_pilot_class_order_helper():
-    """pilot_class_order() must match legacy np.random.permutation."""
-    expected = _expected_class_order()
-    got = pilot_class_order(100, 1993)
-    assert got == expected
+def test_class_order_seed1_matches_fixture(patched_cifar100):
+    fixture = _load_fixture("cifar100__init10__inc10__seed1")
+    dm = OverlapDataManager("cifar100", init_cls=10, increment=10, shuffle_seed=1)
+    assert dm._class_order == fixture["class_order"]
+
+
+def test_task_class_lists_match_fixture(baseline_manager):
+    fixture = _load_fixture("cifar100__init10__inc10__seed1993")
+    assert baseline_manager._task_class_lists == fixture["task_class_lists"]
+
+
+def test_increments_match_fixture(baseline_manager):
+    fixture = _load_fixture("cifar100__init10__inc10__seed1993")
+    assert baseline_manager._increments == fixture["increments"]
+
+
+def test_pilot_class_order_helper_matches_fixture():
+    """pilot_class_order() must match the golden fixture exactly."""
+    fixture = _load_fixture("cifar100__init10__inc10__seed1993")
+    assert pilot_class_order(100, 1993) == fixture["class_order"]
+
+
+def test_different_seeds_different_orders():
+    fix1 = _load_fixture("cifar100__init10__inc10__seed1993")
+    fix2 = _load_fixture("cifar100__init10__inc10__seed1")
+    assert fix1["class_order"] != fix2["class_order"]
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +84,6 @@ def test_pilot_class_order_helper():
 # ---------------------------------------------------------------------------
 
 def test_nb_tasks_matches_pilot(baseline_manager):
-    # 100 classes, init_cls=10, increment=10 → 10 tasks
     assert baseline_manager.nb_tasks == 10
 
 
@@ -102,7 +126,6 @@ def test_get_dataset_labels_are_remapped(baseline_manager):
     labels = set()
     for _, _, label in ds:
         labels.add(int(label))
-    # All labels must be in the remapped class range for task 0 (0..9)
     assert labels.issubset(set(range(10)))
 
 

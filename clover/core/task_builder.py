@@ -5,9 +5,12 @@ metadata into the concrete per-task class lists that
 
 from __future__ import annotations
 
+import logging
 from typing import List
 
 from clover.core.overlap_spec import OverlapSpec
+
+logger = logging.getLogger(__name__)
 
 
 def build_tasks(
@@ -16,6 +19,7 @@ def build_tasks(
     increment: int,
     class_order: List[int],
     overlap_spec: OverlapSpec,
+    preserve_size: bool = True,
 ) -> List[List[int]]:
     """Return per-task lists of *remapped* class IDs.
 
@@ -24,30 +28,34 @@ def build_tasks(
     gets ``class_order[init_cls + (k-1)*increment : init_cls + k*increment]``,
     and any remainder forms a final task.
 
-    For overlap modes, the baseline split is computed first, then shared classes
-    declared in ``overlap_spec.pairs`` are injected into the listed tasks.  If
-    a shared class was already assigned to a task naturally, it is a no-op.
-    Tasks may grow beyond *increment* when new shared classes are injected.
+    For overlap modes the baseline split is computed first, then shared classes
+    from ``overlap_spec.pairs`` are injected.  When ``preserve_size=True``
+    (default), injecting a shared class into a non-final task evicts the
+    highest-index non-shared class from that task so its size stays constant.
+    Evicted classes are collected and appended to the final task at the end;
+    only the final task is allowed to grow.  When every class in a task is
+    already shared (nothing evictable), the task grows and a warning is emitted.
+
+    When ``preserve_size=False`` the v0.1 behaviour is used: tasks simply grow
+    when shared classes are appended.
 
     Args:
         total_classes: Number of classes in the underlying dataset.
         init_cls: Number of classes in the first task.
         increment: Number of new classes per subsequent task.
         class_order: Permutation of ``range(total_classes)`` produced by the
-            seeded shuffle (PILOT-compatible via
-            :func:`~clover.utils.seeding.pilot_class_order`).
+            seeded shuffle.
         overlap_spec: Validated :class:`~clover.core.overlap_spec.OverlapSpec`.
+        preserve_size: When ``True`` (default) non-final tasks keep their
+            original size by evicting the highest non-shared class to the final
+            task.  When ``False`` tasks may grow.
 
     Returns:
         ``task_class_lists[t]`` is a list of remapped class IDs for task *t*.
-        Remapped class ID *i* corresponds to ``class_order[i]`` in original space.
     """
     assert init_cls <= total_classes, "init_cls exceeds total number of classes."
 
     # --- Step 1: baseline PILOT-style slicing ---
-    # We work in *remapped* index space (0 .. total_classes-1).
-    # class_order[i] = original class that maps to remapped index i.
-    # PILOT's increments list:
     increments: List[int] = [init_cls]
     while sum(increments) + increment < total_classes:
         increments.append(increment)
@@ -66,6 +74,15 @@ def build_tasks(
 
     # --- Step 2: inject shared classes from pairs ---
     n_tasks = len(task_class_lists)
+    last = n_tasks - 1
+
+    # Union of all shared classes across every pair — used to identify evictable classes.
+    all_shared: set = set()
+    for pair in overlap_spec.pairs:
+        all_shared.update(pair.shared_classes)
+
+    displaced: List[int] = []
+
     for pair in overlap_spec.pairs:
         t_a, t_b = pair.tasks
         if t_a >= n_tasks or t_b >= n_tasks:
@@ -74,10 +91,28 @@ def build_tasks(
                 f"{n_tasks} tasks exist (0-based)."
             )
         for cls in pair.shared_classes:
-            if cls not in task_class_lists[t_a]:
-                task_class_lists[t_a].append(cls)
-            if cls not in task_class_lists[t_b]:
-                task_class_lists[t_b].append(cls)
+            for t in (t_a, t_b):
+                if cls not in task_class_lists[t]:
+                    if preserve_size and t != last:
+                        evictable = [
+                            c for c in task_class_lists[t] if c not in all_shared
+                        ]
+                        if evictable:
+                            victim = max(evictable)
+                            task_class_lists[t].remove(victim)
+                            displaced.append(victim)
+                        else:
+                            logger.warning(
+                                "Task %d: all classes are shared; cannot evict to "
+                                "preserve size — growing task instead.",
+                                t,
+                            )
+                    task_class_lists[t].append(cls)
+
+    # Displaced classes land in the final task (may grow it).
+    for cls in displaced:
+        if cls not in task_class_lists[last]:
+            task_class_lists[last].append(cls)
 
     return task_class_lists
 

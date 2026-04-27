@@ -3,8 +3,8 @@
 Commands
 --------
 inspect <config.yaml>
-    Load a config, print the overlap matrix as ASCII, and save diagnostic
-    plots to ./inspect_output/.
+    Load a config (OverlapDataManager or StreamSpec format), print the overlap
+    matrix as ASCII, and save diagnostic plots to ./inspect_output/.
 """
 
 from __future__ import annotations
@@ -33,11 +33,30 @@ def main() -> None:
 def _cmd_inspect(config_path: str) -> None:
     import os
 
-    from clover.core.data_manager import OverlapDataManager
+    import yaml
+
     from clover.utils.visualizer import plot_class_frequency, plot_overlap_matrix
 
     print(f"Loading config: {config_path}")
-    dm = OverlapDataManager.from_yaml(config_path)
+
+    with open(config_path) as fh:
+        raw = yaml.safe_load(fh)
+
+    # Detect config type: StreamSpec uses "dataset" key; OverlapDataManager uses "dataset_name"
+    if "dataset" in raw and "dataset_name" not in raw:
+        from clover.core.benchmark import Benchmark
+
+        bench = Benchmark.from_yaml(config_path)
+        dm = bench.engine
+        stream_info = (
+            f"stream_seed={bench.stream_spec.stream_seed}  "
+            f"revisits={len(bench.stream_spec.revisits)}"
+        )
+    else:
+        from clover.core.data_manager import OverlapDataManager
+
+        dm = OverlapDataManager.from_yaml(config_path)
+        stream_info = f"scenario={dm.overlap_spec.mode if dm.overlap_spec else 'none'}"
 
     mat = dm.get_overlap_matrix()
     T = mat.shape[0]
@@ -45,7 +64,7 @@ def _cmd_inspect(config_path: str) -> None:
     print(f"\nDataset   : {dm.dataset_name}")
     print(f"Tasks     : {T}")
     print(f"Classes   : {dm.total_classes}")
-    print(f"Scenario  : {dm.overlap_spec.mode if dm.overlap_spec else 'none'}\n")
+    print(f"Config    : {stream_info}\n")
 
     # ASCII overlap matrix
     header = "     " + "  ".join(f"T{i:02d}" for i in range(T))

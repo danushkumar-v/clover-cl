@@ -105,3 +105,77 @@ def test_no_duplicate_classes_injected():
     tasks = build_tasks(20, 5, 5, order, spec)
 
     assert tasks[0].count(0) == 1
+
+
+# ---------------------------------------------------------------------------
+# preserve_size contract
+# ---------------------------------------------------------------------------
+
+def test_preserve_size_true_keeps_non_final_task_sizes():
+    """Non-final tasks must not grow when preserve_size=True."""
+    order = _identity_order(50)
+    # inject classes 0, 1 (from task 0) into task 2
+    pair = OverlapPair(tasks=(0, 2), shared_classes=[0, 1])
+    spec = OverlapSpec(mode="partial", pairs=[pair])
+    tasks = build_tasks(50, 10, 10, order, spec, preserve_size=True)
+
+    # total=50, init=10, inc=10 → 5 tasks of [0-9, 10-19, 20-29, 30-39, 40-49]
+    # task 0 already has [0,1] — no injection needed, size stays 10
+    assert len(tasks[0]) == 10
+    # task 2 receives [0,1] → evicts [29,28] → stays at 10
+    assert len(tasks[2]) == 10
+    assert 0 in tasks[2]
+    assert 1 in tasks[2]
+
+
+def test_preserve_size_displaced_classes_in_final_task():
+    """Classes evicted from non-final tasks must appear in the final task."""
+    order = _identity_order(50)
+    pair = OverlapPair(tasks=(0, 2), shared_classes=[0, 1])
+    spec = OverlapSpec(mode="partial", pairs=[pair])
+    tasks = build_tasks(50, 10, 10, order, spec, preserve_size=True)
+
+    # Evicted from task 2: the two highest non-shared classes (28, 29)
+    final = tasks[-1]
+    assert 28 in final
+    assert 29 in final
+
+
+def test_preserve_size_false_allows_growth():
+    """With preserve_size=False tasks may grow (v0.1 regression guard)."""
+    order = _identity_order(50)
+    pair = OverlapPair(tasks=(0, 2), shared_classes=[0, 1])
+    spec = OverlapSpec(mode="partial", pairs=[pair])
+    tasks = build_tasks(50, 10, 10, order, spec, preserve_size=False)
+
+    # task 2 grows from 10 → 12 (two new classes injected, none evicted)
+    assert len(tasks[2]) == 12
+    assert 0 in tasks[2]
+    assert 1 in tasks[2]
+
+
+def test_preserve_size_final_task_grows_for_exact_replay():
+    """Injecting into the final task always grows it (no eviction target)."""
+    order = _identity_order(100)
+    # exact_replay injects task 0's 10 classes into the last task (9)
+    pair = OverlapPair(tasks=(0, 9), shared_classes=list(range(10)))
+    spec = OverlapSpec(mode="exact_replay", pairs=[pair])
+    tasks = build_tasks(100, 10, 10, order, spec, preserve_size=True)
+
+    # Task 9 is the last task — it is allowed to grow
+    assert len(tasks[9]) > 10
+    for cls in range(10):
+        assert cls in tasks[9]
+
+
+def test_preserve_size_no_information_lost():
+    """Every original class must appear in at least one task after injection."""
+    order = _identity_order(50)
+    pair = OverlapPair(tasks=(0, 2), shared_classes=[0, 1, 2, 3, 4])
+    spec = OverlapSpec(mode="partial", pairs=[pair])
+    tasks = build_tasks(50, 10, 10, order, spec, preserve_size=True)
+
+    all_classes = set()
+    for t in tasks:
+        all_classes.update(t)
+    assert all_classes == set(range(50))

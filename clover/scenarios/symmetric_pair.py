@@ -10,6 +10,7 @@ from typing import Tuple
 
 from clover.core.overlap_spec import ImageSplit, OverlapPair, OverlapSpec
 from clover.core.task_builder import compute_increments
+from clover.utils.seeding import get_rng
 
 
 def build_spec(
@@ -48,9 +49,9 @@ def build_spec(
     task_a_start = sum(increments[:t_a])
     task_a_classes = list(range(task_a_start, task_a_start + increments[t_a]))
 
-    # Share the first half
     n_shared = max(1, len(task_a_classes) // 2)
-    shared = task_a_classes[:n_shared]
+    rng = get_rng(seed)
+    shared = sorted(rng.choice(task_a_classes, size=n_shared, replace=False).tolist())
 
     pair_obj = OverlapPair(tasks=(t_a, t_b), shared_classes=shared)
     spec = OverlapSpec(
@@ -61,3 +62,38 @@ def build_spec(
     )
     spec.validate()
     return spec
+
+
+def build_stream_spec(
+    total_classes: int,
+    init_cls: int,
+    increment: int,
+    n_revisit_classes: int = 3,
+    placement: str = "random",
+    min_gap: int = 2,
+    image_strategy: str = "disjoint",
+    stream_seed: int = 42,
+    shuffle_seed: int = 1993,
+    dataset: str = "cifar100",
+    data_root: str = "./data",
+):
+    """Return a StreamSpec for the symmetric_pair pattern."""
+    from clover.core.stream_spec import RevisitSpec, StreamSpec
+
+    return StreamSpec(
+        dataset=dataset,
+        init_cls=init_cls,
+        increment=increment,
+        revisits=[
+            RevisitSpec(
+                classes=n_revisit_classes,
+                times=1,
+                placement=placement,
+                min_gap=min_gap,
+            )
+        ],
+        image_strategy=image_strategy,
+        shuffle_seed=shuffle_seed,
+        stream_seed=stream_seed,
+        data_root=data_root,
+    )
