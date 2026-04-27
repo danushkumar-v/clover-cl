@@ -1,0 +1,14 @@
+dataset: cifar100
+init_cls: 10
+increment: 10
+shuffle_seed: 1993
+stream_seed: 42
+image_strategy: disjoint
+image_split_ratio: 0.5
+data_root: ./data
+preserve_task_size: true
+revisits:
+  - classes: [3, 7, 22]
+    times: 1
+    placement: random
+    min_gap: 3

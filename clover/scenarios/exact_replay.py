@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from clover.core.overlap_spec import ImageSplit, OverlapPair, OverlapSpec
+from clover.core.stream_spec import RevisitSpec, StreamSpec
 from clover.core.task_builder import compute_increments
 
 
@@ -53,3 +54,36 @@ def build_spec(
     )
     spec.validate()
     return spec
+
+
+def build_stream_spec(
+    total_classes: int,
+    init_cls: int,
+    increment: int,
+    image_strategy: str = "duplicate",
+    stream_seed: int = 42,
+    shuffle_seed: int = 1993,
+    dataset: str = "cifar100",
+    data_root: str = "./data",
+) -> StreamSpec:
+    """Return a :class:`~clover.core.stream_spec.StreamSpec` for exact replay.
+
+    All classes from the first experience revisit the final experience once.
+    """
+    return StreamSpec(
+        dataset=dataset,
+        init_cls=init_cls,
+        increment=increment,
+        revisits=[
+            RevisitSpec(
+                classes=list(range(init_cls)),
+                times=1,
+                placement="end_of_stream",
+                min_gap=1,
+            )
+        ],
+        image_strategy=image_strategy,
+        shuffle_seed=shuffle_seed,
+        stream_seed=stream_seed,
+        data_root=data_root,
+    )

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Tuple
 
 from clover.core.overlap_spec import ImageSplit, OverlapPair, OverlapSpec
+from clover.core.stream_spec import RevisitSpec, StreamSpec
 from clover.core.task_builder import compute_increments
 from clover.utils.seeding import get_rng
 
@@ -62,3 +63,59 @@ def build_spec(
     )
     spec.validate()
     return spec
+
+
+def build_stream_spec(
+    total_classes: int,
+    init_cls: int,
+    increment: int,
+    n_revisit_classes: int = 5,
+    placement: str = "random",
+    min_gap: int = 3,
+    image_strategy: str = "disjoint",
+    stream_seed: int = 42,
+    shuffle_seed: int = 1993,
+    dataset: str = "cifar100",
+    data_root: str = "./data",
+) -> StreamSpec:
+    """Return a :class:`~clover.core.stream_spec.StreamSpec` for partial overlap.
+
+    The framework will randomly select ``n_revisit_classes`` classes and place
+    each one back into an experience according to ``placement``.  Use
+    ``stream_seed`` to vary the concrete realisation while keeping the same
+    statistical structure.
+
+    Args:
+        total_classes: Total number of dataset classes (unused here; kept for
+            API symmetry with ``build_spec``).
+        init_cls: Classes in the first experience.
+        increment: Classes added per subsequent experience.
+        n_revisit_classes: How many classes revisit once.
+        placement: Revisit placement strategy.
+        min_gap: Minimum experiences between first appearance and revisit.
+        image_strategy: Image-overlap strategy for shared classes.
+        stream_seed: Seed for revisit placement and class selection.
+        shuffle_seed: Seed for PILOT-compatible class-order shuffle.
+        dataset: Dataset name.
+        data_root: Root directory for dataset files.
+
+    Returns:
+        A :class:`~clover.core.stream_spec.StreamSpec`.
+    """
+    return StreamSpec(
+        dataset=dataset,
+        init_cls=init_cls,
+        increment=increment,
+        revisits=[
+            RevisitSpec(
+                classes=n_revisit_classes,
+                times=1,
+                placement=placement,
+                min_gap=min_gap,
+            )
+        ],
+        image_strategy=image_strategy,
+        shuffle_seed=shuffle_seed,
+        stream_seed=stream_seed,
+        data_root=data_root,
+    )

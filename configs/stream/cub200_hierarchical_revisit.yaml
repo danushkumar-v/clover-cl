@@ -1,0 +1,14 @@
+dataset: cub200
+init_cls: 20
+increment: 20
+shuffle_seed: 1993
+stream_seed: 42
+image_strategy: duplicate
+image_split_ratio: 0.5
+data_root: ./data
+preserve_task_size: true
+revisits:
+  - classes: 5
+    times: 1
+    placement: spaced
+    min_gap: 2
