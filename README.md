@@ -151,7 +151,7 @@ Each scenario ships two helpers:
 - `build_spec(...)` — returns an `OverlapSpec` (legacy / low-level API)
 - `build_stream_spec(...)` — returns a `StreamSpec` (modern API)
 
-| Scenario | Module | Description | Stream-spec helper |
+| Scenario | Module | <div style="width: 350px">Description</div> | Stream-spec helper |
 |---|---|---|---|
 | `exact_replay` | `clover.scenarios.exact_replay` | Task N's classes are identical to Task 0's classes | `exact_replay.build_stream_spec` |
 | `partial_overlap` | `clover.scenarios.partial_overlap` | A configurable fraction of Task N's classes appear in an earlier task | `partial_overlap.build_stream_spec` |
