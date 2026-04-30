@@ -151,16 +151,16 @@ Each scenario ships two helpers:
 - `build_spec(...)` — returns an `OverlapSpec` (legacy / low-level API)
 - `build_stream_spec(...)` — returns a `StreamSpec` (modern API)
 
-| Scenario | Module | <div style="width: 350px">Description</div> | Stream-spec helper |
+| Scenario | Module | Description | Stream-spec helper |
 |---|---|---|---|
-| `exact_replay` | `clover.scenarios.exact_replay` | Task N's classes are identical to Task 0's classes | `exact_replay.build_stream_spec` |
-| `partial_overlap` | `clover.scenarios.partial_overlap` | A configurable fraction of Task N's classes appear in an earlier task | `partial_overlap.build_stream_spec` |
-| `hierarchical` | `clover.scenarios.hierarchical` | Classes sharing a taxonomic parent are distributed across tasks | `hierarchical.build_stream_spec` |
-| `distribution_shift` | `clover.scenarios.distribution_shift` | Same classes appear in multiple tasks from different feature distributions | `distribution_shift.build_stream_spec` |
-| `near_miss` | `clover.scenarios.near_miss` | Tasks share no classes but contain visually adjacent classes (wolf/husky) | `near_miss.build_stream_spec` |
-| `long_range_revisit` | `clover.scenarios.long_range_revisit` | Task 0 and Task T−1 share classes; intermediate tasks are unrelated | `long_range_revisit.build_stream_spec` |
-| `cumulative_drift` | `clover.scenarios.cumulative_drift` | Anchor classes appear in every task alongside new classes | `cumulative_drift.build_stream_spec` |
-| `symmetric_pair` | `clover.scenarios.symmetric_pair` | Tasks M and N share 50% classes; each retains 50% unique classes | `symmetric_pair.build_stream_spec` |
+| `exact_replay` | `clover.scenarios.`<br>`exact_replay` | Task N's classes are identical to Task 0's classes | `exact_replay.`<br>`build_stream_spec` |
+| `partial_overlap` | `clover.scenarios.`<br>`partial_overlap` | A configurable fraction of Task N's classes appear in an earlier task | `partial_overlap.`<br>`build_stream_spec` |
+| `hierarchical` | `clover.scenarios.`<br>`hierarchical` | Classes sharing a taxonomic parent are distributed across tasks | `hierarchical.`<br>`build_stream_spec` |
+| `distribution_shift` | `clover.scenarios.`<br>`distribution_shift` | Same classes appear in multiple tasks from different feature distributions | `distribution_shift.`<br>`build_stream_spec` |
+| `near_miss` | `clover.scenarios.`<br>`near_miss` | Tasks share no classes but contain visually adjacent classes (wolf/husky) | `near_miss.`<br>`build_stream_spec` |
+| `long_range_revisit` | `clover.scenarios.`<br>`long_range_revisit` | Task 0 and Task T−1 share classes; intermediate tasks are unrelated | `long_range_revisit.`<br>`build_stream_spec` |
+| `cumulative_drift` | `clover.scenarios.`<br>`cumulative_drift` | Anchor classes appear in every task alongside new classes | `cumulative_drift.`<br>`build_stream_spec` |
+| `symmetric_pair` | `clover.scenarios.`<br>`symmetric_pair` | Tasks M and N share 50% classes; each retains 50% unique classes | `symmetric_pair.`<br>`build_stream_spec` |
 
 See [`clover/scenarios/README.md`](clover/scenarios/README.md) for guidance on when to use each.
 
