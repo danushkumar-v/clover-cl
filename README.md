@@ -231,7 +231,7 @@ CIR work it builds upon:
 ```bibtex
 @software{clover2026,
   title   = {CLOVER: Continual Learning with OVERlap},
-  author  = {Danush Kumar Venkatesh},
+  author  = {Danushkumar Venkadesh},
   year    = {2026},
   url     = {https://github.com/danushkumar-v/clover-cl},
 }
