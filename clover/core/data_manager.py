@@ -169,7 +169,11 @@ class OverlapDataManager:
         test_ds = ds_cls(root=data_root, train=False)
 
         self._use_path: bool = train_ds.use_path
-        self._total_classes: int = train_ds.num_classes
+        # Number of *real* categories in the underlying dataset.  This drives
+        # the class-order permutation and the remap; it is distinct from
+        # ``_total_classes`` (the classifier-head size), which may be larger
+        # when echo/clone classes extend the label space.
+        self._real_classes: int = train_ds.num_classes
 
         # Store raw data references (PILOT-compatible internals)
         if self._use_path:
@@ -192,7 +196,7 @@ class OverlapDataManager:
         self._common_trsf = train_ds.common_trsf
 
         # --- Class order (PILOT-compatible legacy RNG) ---
-        self._class_order: List[int] = pilot_class_order(self._total_classes, shuffle_seed)
+        self._class_order: List[int] = pilot_class_order(self._real_classes, shuffle_seed)
         logger.info("Class order (first 20): %s", self._class_order[:20])
 
         # Remap targets: target value = position of original class in _class_order
@@ -203,23 +207,46 @@ class OverlapDataManager:
             self._test_targets_orig, self._class_order
         )
 
+        # --- Echo (clone) classes ---
+        # new_id -> (source_id, image_relation).  Echo ids are fresh label
+        # slots whose images come from an earlier source category.
+        self._echo_sources: Dict[int, tuple] = {
+            e.new_id: (e.source_id, e.image_relation) for e in effective_spec.echoes
+        }
+
         # --- Build task class lists ---
-        self._task_class_lists: List[List[int]] = build_tasks(
-            total_classes=self._total_classes,
-            init_cls=init_cls,
-            increment=increment,
-            class_order=self._class_order,
-            overlap_spec=effective_spec,
-            preserve_size=preserve_task_size,
-        )
+        # Two layout sources: an explicit per-task list supplied by the spec
+        # (fixed-size scenarios) or the legacy backbone-slicing path.
+        if effective_spec.task_class_lists is not None:
+            self._task_class_lists: List[List[int]] = [
+                list(t) for t in effective_spec.task_class_lists
+            ]
+        else:
+            self._task_class_lists = build_tasks(
+                total_classes=self._real_classes,
+                init_cls=init_cls,
+                increment=increment,
+                class_order=self._class_order,
+                overlap_spec=effective_spec,
+                preserve_size=preserve_task_size,
+            )
         self._increments: List[int] = [len(t) for t in self._task_class_lists]
+
+        # Head size: explicit override, else one past the largest id in use.
+        # The layout is validated contiguous (0..N-1), so max id + 1 == the
+        # number of label slots PILOT must allocate.
+        if effective_spec.total_classes_override is not None:
+            self._total_classes: int = int(effective_spec.total_classes_override)
+        else:
+            max_id = max((max(t) for t in self._task_class_lists if t), default=-1)
+            self._total_classes = max_id + 1
 
         # --- Build class → image-index maps (using REMAPPED class IDs) ---
         train_c2i = _build_remapped_class_to_indices(
-            self._train_targets, self._total_classes
+            self._train_targets, self._real_classes
         )
         test_c2i = _build_remapped_class_to_indices(
-            self._test_targets, self._total_classes
+            self._test_targets, self._real_classes
         )
 
         # --- Assign images via image_assigner ---
@@ -242,6 +269,12 @@ class OverlapDataManager:
             image_split=test_split,
             rng=rng_test,
         )
+
+        # --- Echo image assignment (post-step) ---
+        # Echo ids own no real images, so assign_images left them empty; fill
+        # them from their source category here, splitting the pool for "new".
+        if self._echo_sources:
+            self._assign_echo_images(train_c2i, test_c2i, base_seed=effective_spec.seed)
 
     # ------------------------------------------------------------------
     # PILOT-compatible properties
@@ -340,11 +373,16 @@ class OverlapDataManager:
             )
             data, targets = self._collect_from_assignment(source, assignment, m_rate)
         else:
-            # Baseline path: identical to PILOT's _select
+            # Baseline path: identical to PILOT's _select, plus echo handling.
+            # Echo (clone) ids carry no rows in the target array, so a plain
+            # _select would yield nothing — this is the path PILOT's full-range
+            # test loader uses, so echo classes must be reachable here too.
             x, y = self._get_raw(source)
             data_list, targets_list = [], []
             for idx in indices:
-                if m_rate is None:
+                if idx in self._echo_sources:
+                    cd, ct = self._echo_rows(source, idx)
+                elif m_rate is None:
                     cd, ct = _select(x, y, idx, idx + 1)
                 else:
                     cd, ct = _select_rmm(x, y, idx, idx + 1, m_rate)
@@ -529,8 +567,20 @@ class OverlapDataManager:
 
     def getlen(self, index: int) -> int:
         """PILOT-compatible: count train samples of remapped class *index*."""
+        if index in self._echo_sources:
+            # Echo classes carry no rows in _train_targets; count the images
+            # assigned to them across tasks instead.
+            return int(sum(len(a.get(index, [])) for a in self._train_assignment))
         y = self._train_targets
         return int(np.sum(y == index))
+
+    def get_echo_map(self) -> Dict[int, tuple]:
+        """Return ``{echo_id: (source_id, image_relation)}`` for clone classes.
+
+        Empty for non-echo scenarios.  The harness uses this to score echo
+        classes as *returning* categories in the CLOVER overlap metrics.
+        """
+        return dict(self._echo_sources)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -575,10 +625,73 @@ class OverlapDataManager:
                 chosen = np.random.randint(0, len(idxs), size=n_keep)
                 idxs = np.sort(idxs[chosen])
             data_list.append(x[idxs])
-            targets_list.append(y[idxs])
+            # Label by the assignment KEY, not the raw target.  For real
+            # classes the key equals the stored target; for echo (clone)
+            # classes the key is the fresh id while the underlying images
+            # still carry their source target, so the key is what we want.
+            targets_list.append(np.full(len(idxs), cls_id, dtype=np.int64))
         if not data_list:
             return np.array([]), np.array([], dtype=int)
         return np.concatenate(data_list), np.concatenate(targets_list)
+
+    def _assign_echo_images(
+        self,
+        train_c2i: Dict[int, List[int]],
+        test_c2i: Dict[int, List[int]],
+        base_seed: int,
+    ) -> None:
+        """Populate echo classes' image assignments from their source category.
+
+        ``"same"`` reuses the source's full pool (duplicate images).  ``"new"``
+        splits the source pool in half: the source's first appearance keeps one
+        half and the echo gets the disjoint other half, so the revisit shows
+        genuinely unseen images.  Test images always duplicate the full source
+        pool so each echo class is evaluated on its whole category.
+        """
+        first_task: Dict[int, int] = {}
+        for t, cls_list in enumerate(self._task_class_lists):
+            for c in cls_list:
+                first_task.setdefault(c, t)
+
+        rng_echo = get_rng(base_seed + 7)
+        for new_id, (source_id, relation) in self._echo_sources.items():
+            echo_task = first_task.get(new_id)
+            src_task = first_task.get(source_id)
+            if echo_task is None or src_task is None:
+                raise ValueError(
+                    f"Echo class {new_id} (source {source_id}) is not placed "
+                    f"in any task."
+                )
+
+            train_pool = list(train_c2i.get(source_id, []))
+            test_pool = list(test_c2i.get(source_id, []))
+
+            if relation == "same":
+                self._train_assignment[echo_task][new_id] = list(train_pool)
+            else:  # "new": disjoint split with the source's first appearance
+                shuffled = list(rng_echo.permutation(train_pool))
+                cut = len(shuffled) // 2
+                self._train_assignment[src_task][source_id] = shuffled[:cut]
+                self._train_assignment[echo_task][new_id] = shuffled[cut:]
+
+            self._test_assignment[echo_task][new_id] = list(test_pool)
+
+    def _echo_rows(self, source: str, echo_id: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Return ``(images, targets)`` for an echo class via the class-list path.
+
+        Pulls the echo's assigned image indices (it lives in exactly one task)
+        and labels them with the echo id, so a full-range test loader can
+        evaluate the clone like any other class.
+        """
+        x, _ = self._get_raw(source)
+        assignment = (
+            self._train_assignment if source == "train" else self._test_assignment
+        )
+        all_idx: List[int] = []
+        for task_map in assignment:
+            all_idx.extend(task_map.get(echo_id, []))
+        idxs = np.array(all_idx, dtype=int)
+        return x[idxs], np.full(len(idxs), echo_id, dtype=np.int64)
 
     def _find_task_for_indices(self, indices: List[int]) -> int:
         """Return the first task whose class list is a superset of *indices*."""

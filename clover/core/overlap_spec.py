@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Literal, Tuple
+from typing import List, Literal, Optional, Tuple
 
 import yaml
 
@@ -46,15 +46,45 @@ class ImageSplit:
     overlap_pct: float = 0.0
 
 
+@dataclass
+class EchoSpec:
+    """An *echo* (clone) class.
+
+    An echo re-presents a previously seen category under a **brand-new label
+    id**, rather than reusing the source class id (which is what
+    :class:`OverlapPair` does).  This lets a stream contain a "repeat task"
+    that a class-incremental learner trains on as ordinary new classes — the
+    head simply grows by ``increment`` — while the underlying images still
+    come from an earlier category.  It is the mechanism behind the
+    ``exact_replay``, ``long_range_revisit`` and ``mid_range_revisit``
+    scenarios, and the returning half of ``partial_overlap``.
+
+    Args:
+        new_id: The fresh remapped class id assigned to the echo.  Must not
+            collide with any source (real) class id used by the stream.
+        source_id: The remapped id of the category being echoed.  The echo's
+            images are drawn from this category's image pool.
+        image_relation: ``"same"`` reuses the source's images (duplicate);
+            ``"new"`` draws a disjoint, held-out subset (the source task keeps
+            the complementary subset).
+    """
+
+    new_id: int
+    source_id: int
+    image_relation: Literal["same", "new"] = "new"
+
+
 _VALID_MODES = frozenset(
     [
         "none",
         "exact_replay",
         "partial",
+        "partial_overlap_50",
         "hierarchical",
         "distribution_shift",
         "near_miss",
         "long_range_revisit",
+        "mid_range_revisit",
         "cumulative_drift",
         "symmetric_pair",
     ]
@@ -89,6 +119,18 @@ class OverlapSpec:
     image_split: ImageSplit = field(default_factory=ImageSplit)
     seed: int = 42
 
+    # --- Explicit-layout extensions (used by the fixed-size scenarios) ---
+    # When ``task_class_lists`` is provided the data manager uses it verbatim
+    # instead of slicing a backbone from init_cls/increment.  This is how the
+    # fixed-size scenarios express bespoke per-task layouts (e.g. a mixed
+    # returning+fresh task, or anchor classes in every task).  ``echoes``
+    # declares the clone classes referenced by those layouts.
+    task_class_lists: Optional[List[List[int]]] = None
+    echoes: List[EchoSpec] = field(default_factory=list)
+    # Head size (number of label slots) including echo ids.  When None the
+    # data manager infers it as max(class id) + 1 over the layout.
+    total_classes_override: Optional[int] = None
+
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
@@ -98,8 +140,38 @@ class OverlapSpec:
         if self.mode not in _VALID_MODES:
             raise ValueError(f"Unknown mode {self.mode!r}. Valid: {sorted(_VALID_MODES)}")
 
-        if self.mode == "none" and self.pairs:
-            raise ValueError("mode='none' must have an empty pairs list.")
+        if self.mode == "none" and (self.pairs or self.echoes):
+            raise ValueError("mode='none' must have empty pairs and echoes.")
+
+        if self.echoes:
+            echo_ids = [e.new_id for e in self.echoes]
+            if len(echo_ids) != len(set(echo_ids)):
+                raise ValueError("EchoSpec.new_id values must be unique.")
+            for e in self.echoes:
+                if e.image_relation not in ("same", "new"):
+                    raise ValueError(
+                        f"EchoSpec.image_relation must be 'same' or 'new', "
+                        f"got {e.image_relation!r}."
+                    )
+
+        if self.task_class_lists is not None:
+            seen_first: dict = {}
+            for t, cls_list in enumerate(self.task_class_lists):
+                if not cls_list:
+                    raise ValueError(f"task_class_lists[{t}] is empty.")
+                for c in cls_list:
+                    seen_first.setdefault(c, t)
+            # First-appearance order must be a contiguous 0..N-1 block so the
+            # PILOT-compatible classifier head (sized by cumulative new
+            # classes) stays gap-free.
+            first_order = sorted(seen_first, key=lambda c: (seen_first[c], c))
+            for expected, c in enumerate(first_order):
+                if c != expected:
+                    raise ValueError(
+                        "task_class_lists must introduce class ids in contiguous "
+                        f"first-appearance order 0..N-1; expected id {expected} "
+                        f"but got {c}. (Gaps break PILOT head sizing.)"
+                    )
 
         for i, pair in enumerate(self.pairs):
             if any(t < 0 for t in pair.tasks):
@@ -175,4 +247,18 @@ class OverlapSpec:
                 {"tasks": list(p.tasks), "shared_classes": p.shared_classes}
                 for p in self.pairs
             ],
+            "echoes": [
+                {
+                    "new_id": e.new_id,
+                    "source_id": e.source_id,
+                    "image_relation": e.image_relation,
+                }
+                for e in self.echoes
+            ],
+            "task_class_lists": (
+                [list(t) for t in self.task_class_lists]
+                if self.task_class_lists is not None
+                else None
+            ),
+            "total_classes_override": self.total_classes_override,
         }

@@ -117,6 +117,32 @@ def build_tasks(
     return task_class_lists
 
 
+def disjoint_backbone(
+    total_classes: int, init_cls: int, increment: int
+) -> List[List[int]]:
+    """Return contiguous disjoint task slices over remapped ids ``0..N-1``.
+
+    This is the PILOT-equivalent baseline stream as explicit per-task class
+    lists.  The fixed-size scenarios start from this backbone and then append
+    or modify tasks (echo/repeat tasks, mixed tasks, anchors).
+
+    Args:
+        total_classes: Number of real classes the backbone should cover.
+        init_cls: Classes in the first task.
+        increment: Classes added per subsequent task.
+
+    Returns:
+        ``lists[t]`` is the list of remapped class ids in task *t*.
+    """
+    incs = compute_increments(total_classes, init_cls, increment)
+    lists: List[List[int]] = []
+    cursor = 0
+    for inc in incs:
+        lists.append(list(range(cursor, cursor + inc)))
+        cursor += inc
+    return lists
+
+
 def compute_increments(total_classes: int, init_cls: int, increment: int) -> List[int]:
     """Return the PILOT-style increments list for diagnostic use.
 
