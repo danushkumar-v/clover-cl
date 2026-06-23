@@ -30,15 +30,20 @@ def test_exact_replay_validates():
     spec = exact_replay.build_spec(TOTAL, INIT, INC)
     spec.validate()
     assert spec.mode == "exact_replay"
-    assert len(spec.pairs) == 1
-    assert spec.pairs[0].tasks == (0, 9)
+    # Echo-based: one echo task clones task 0 with the SAME images.
+    assert len(spec.echoes) == INIT
+    assert all(e.image_relation == "same" for e in spec.echoes)
+    assert {e.source_id for e in spec.echoes} == set(range(INIT))
+    assert len(spec.task_class_lists) == 11  # backbone (10 tasks) + echo task
 
 
 def test_partial_overlap_validates():
-    spec = partial_overlap.build_spec(TOTAL, INIT, INC, pair=(0, 5), overlap_fraction=0.5)
+    spec = partial_overlap.build_spec(TOTAL, INIT, INC, overlap_fraction=0.5)
     spec.validate()
-    assert spec.mode == "partial"
-    assert 5 in [len(spec.pairs[0].shared_classes), 10]  # half of init_cls
+    assert spec.mode == "partial_overlap_50"
+    # Half the mixed task is returning (echoes with new images), half fresh.
+    assert len(spec.echoes) == 5
+    assert all(e.image_relation == "new" for e in spec.echoes)
 
 
 def test_hierarchical_validates():
@@ -86,8 +91,9 @@ def test_long_range_revisit_validates():
     spec = long_range_revisit.build_spec(TOTAL, INIT, INC)
     spec.validate()
     assert spec.mode == "long_range_revisit"
-    assert spec.pairs[0].tasks[0] == 0
-    assert spec.pairs[0].tasks[1] == 9  # last task
+    assert len(spec.echoes) == INIT
+    assert all(e.image_relation == "new" for e in spec.echoes)
+    assert {e.source_id for e in spec.echoes} == set(range(INIT))
 
 
 def test_cumulative_drift_validates():
@@ -108,16 +114,21 @@ def test_symmetric_pair_validates():
 # Seeded sampling: different seeds → different shared classes; same seed → same
 # ---------------------------------------------------------------------------
 
-def test_partial_overlap_different_seeds_different_shared():
-    spec1 = partial_overlap.build_spec(TOTAL, INIT, INC, pair=(0, 5), overlap_fraction=0.5, seed=1)
-    spec2 = partial_overlap.build_spec(TOTAL, INIT, INC, pair=(0, 5), overlap_fraction=0.5, seed=2)
-    assert spec1.pairs[0].shared_classes != spec2.pairs[0].shared_classes
+def test_partial_overlap_echo_sources_deterministic():
+    # Returning categories are fixed (task 0's first classes); only the image
+    # sampling varies with the seed, so the echo sources match across seeds.
+    spec1 = partial_overlap.build_spec(TOTAL, INIT, INC, overlap_fraction=0.5, seed=1)
+    spec2 = partial_overlap.build_spec(TOTAL, INIT, INC, overlap_fraction=0.5, seed=2)
+    assert sorted(e.source_id for e in spec1.echoes) == \
+           sorted(e.source_id for e in spec2.echoes)
 
 
 def test_partial_overlap_same_seed_reproducible():
-    spec1 = partial_overlap.build_spec(TOTAL, INIT, INC, pair=(0, 5), overlap_fraction=0.5, seed=7)
-    spec2 = partial_overlap.build_spec(TOTAL, INIT, INC, pair=(0, 5), overlap_fraction=0.5, seed=7)
-    assert spec1.pairs[0].shared_classes == spec2.pairs[0].shared_classes
+    spec1 = partial_overlap.build_spec(TOTAL, INIT, INC, overlap_fraction=0.5, seed=7)
+    spec2 = partial_overlap.build_spec(TOTAL, INIT, INC, overlap_fraction=0.5, seed=7)
+    assert spec1.task_class_lists == spec2.task_class_lists
+    assert [(e.new_id, e.source_id) for e in spec1.echoes] == \
+           [(e.new_id, e.source_id) for e in spec2.echoes]
 
 
 def test_symmetric_pair_different_seeds_different_shared():
@@ -151,28 +162,32 @@ def test_hierarchical_fallback_same_seed_reproducible():
 
 @pytest.fixture
 def tiny_exact_replay(patched_cifar100):
-    spec = exact_replay.build_spec(100, 10, 10, revisit_at_task=9)
+    spec = exact_replay.build_spec(100, 10, 10)
     return OverlapDataManager("cifar100", init_cls=10, increment=10, overlap_spec=spec)
 
 
-def test_exact_replay_matrix_pair_nonzero(tiny_exact_replay):
-    mat = tiny_exact_replay.get_overlap_matrix()
-    assert mat[0, 9] > 0
-    assert mat[9, 0] > 0
-    # Tasks 1..8 should not share with task 0
-    for t in range(1, 9):
-        assert mat[0, t] == 0
+def test_exact_replay_echo_task_is_clone(tiny_exact_replay):
+    dm = tiny_exact_replay
+    # 10-task disjoint backbone plus one echo task (fresh ids, same images).
+    assert dm.nb_tasks == 11
+    em = dm.get_echo_map()
+    assert len(em) == 10
+    assert all(rel == "same" for (_s, rel) in em.values())
+    # Echo ids are disjoint from task 0's ids (a fresh head block).
+    assert set(dm.get_task_classes(10)).isdisjoint(set(dm.get_task_classes(0)))
 
 
 @pytest.fixture
 def tiny_partial(patched_cifar100):
-    spec = partial_overlap.build_spec(100, 10, 10, pair=(0, 5), overlap_fraction=0.5)
+    spec = partial_overlap.build_spec(100, 10, 10, overlap_fraction=0.5)
     return OverlapDataManager("cifar100", init_cls=10, increment=10, overlap_spec=spec)
 
 
-def test_partial_overlap_matrix(tiny_partial):
-    mat = tiny_partial.get_overlap_matrix()
-    assert mat[0, 5] > 0
-    assert mat[5, 0] > 0
-    # Unrelated pairs should not overlap
-    assert mat[1, 3] == 0
+def test_partial_overlap_mixed_task(tiny_partial):
+    dm = tiny_partial
+    em = dm.get_echo_map()
+    assert len(em) == 5
+    # Echoes live in the final mixed task alongside fresh classes.
+    mixed = set(dm.get_task_classes(dm.nb_tasks - 1))
+    assert set(em).issubset(mixed)
+    assert len(mixed) == 10
