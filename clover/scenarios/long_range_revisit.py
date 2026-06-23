@@ -8,49 +8,51 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from clover.core.overlap_spec import ImageSplit, OverlapPair, OverlapSpec
-from clover.core.task_builder import compute_increments
+from clover.core.overlap_spec import EchoSpec, ImageSplit, OverlapPair, OverlapSpec
+from clover.core.task_builder import compute_increments, disjoint_backbone
 
 
 def build_spec(
     total_classes: int,
     init_cls: int,
     increment: int,
-    shared_classes: Optional[List[int]] = None,
-    image_split_strategy: str = "duplicate",
     seed: int = 42,
     **kwargs,
 ) -> OverlapSpec:
-    """Build a long-range revisit spec.
+    """Build a long-range revisit spec (fixed task size).
+
+    Identical structure to :mod:`clover.scenarios.exact_replay` — the full
+    disjoint backbone plus one echo task re-presenting task 0's categories —
+    except the echo uses ``image_relation="new"``: a disjoint, previously
+    unseen half of each category's images.  This tests retention of the
+    *concept* across the maximum stream distance rather than memorisation of
+    specific pixels.
 
     Args:
-        total_classes: Total number of dataset classes.
-        init_cls: Classes in task 0.
+        total_classes: Total number of real dataset classes.
+        init_cls: Classes in task 0 (and the echo task).
         increment: Classes per subsequent task.
-        shared_classes: Explicit list of remapped class IDs shared between task 0
-            and the last task.  If ``None``, all of task 0's classes are shared.
-        image_split_strategy: Image assignment strategy.
         seed: RNG seed.
 
     Returns:
         Validated :class:`~clover.core.overlap_spec.OverlapSpec`.
     """
-    increments = compute_increments(total_classes, init_cls, increment)
-    last_task = len(increments) - 1
-
-    if last_task == 0:
+    backbone = disjoint_backbone(total_classes, init_cls, increment)
+    if len(backbone) < 2:
         raise ValueError("Need at least 2 tasks for long_range_revisit.")
 
-    if shared_classes is not None:
-        shared = list(shared_classes)
-    else:
-        shared = list(range(init_cls))
+    source_ids = list(backbone[0])
+    echo_ids = list(range(total_classes, total_classes + len(source_ids)))
+    echoes = [
+        EchoSpec(new_id=e, source_id=s, image_relation="new")
+        for e, s in zip(echo_ids, source_ids)
+    ]
 
-    pair = OverlapPair(tasks=(0, last_task), shared_classes=shared)
     spec = OverlapSpec(
         mode="long_range_revisit",
-        pairs=[pair],
-        image_split=ImageSplit(strategy=image_split_strategy),
+        task_class_lists=backbone + [echo_ids],
+        echoes=echoes,
+        total_classes_override=total_classes + len(echo_ids),
         seed=seed,
     )
     spec.validate()

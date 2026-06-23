@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Tuple
-
-from clover.core.overlap_spec import ImageSplit, OverlapPair, OverlapSpec
+from clover.core.overlap_spec import EchoSpec, ImageSplit, OverlapPair, OverlapSpec
 from clover.core.stream_spec import RevisitSpec, StreamSpec
-from clover.core.task_builder import compute_increments
+from clover.core.task_builder import compute_increments, disjoint_backbone
 from clover.utils.seeding import get_rng
 
 
@@ -14,51 +12,67 @@ def build_spec(
     total_classes: int,
     init_cls: int,
     increment: int,
-    pair: Tuple[int, int] = (0, 5),
     overlap_fraction: float = 0.5,
-    image_split_strategy: str = "duplicate",
     seed: int = 42,
     **kwargs,
 ) -> OverlapSpec:
-    """Build an :class:`~clover.core.overlap_spec.OverlapSpec` for partial overlap.
+    """Build a fixed-size partial-overlap spec.
 
-    A fraction ``overlap_fraction`` of the smaller task's classes are shared
-    between the two tasks.
+    The final task is a **mixed** task of constant size: half its classes are
+    brand-new (fresh real categories) and half are echoes of task 0's
+    categories returning with new (disjoint) images.  Measuring accuracy on the
+    two halves at that single task yields Repetition Gain — the returning vs.
+    fresh accuracy gap — with everything else held equal.
+
+    The backbone covers the first ``nb_tasks - 1`` tasks; the last backbone
+    task's class budget is rebuilt as the mixed task, so task size never
+    changes.
 
     Args:
-        total_classes: Total number of dataset classes.
-        init_cls: Number of classes in task 0.
-        increment: Classes added per subsequent task.
-        pair: ``(task_a, task_b)`` — the two tasks that share classes.
-        overlap_fraction: Fraction of task_a's classes that reappear in task_b.
-        image_split_strategy: Image assignment strategy for shared classes.
+        total_classes: Total number of real dataset classes.
+        init_cls: Classes in task 0.
+        increment: Classes per subsequent task (also the mixed task's size).
+        overlap_fraction: Fraction of the mixed task that is *returning*
+            (echoed).  ``0.5`` splits the task evenly into returning and fresh.
         seed: RNG seed.
 
     Returns:
         Validated :class:`~clover.core.overlap_spec.OverlapSpec`.
     """
-    if not 0.0 < overlap_fraction <= 1.0:
-        raise ValueError(f"overlap_fraction must be in (0, 1], got {overlap_fraction}.")
+    if not 0.0 < overlap_fraction < 1.0:
+        raise ValueError(f"overlap_fraction must be in (0, 1), got {overlap_fraction}.")
 
-    increments = compute_increments(total_classes, init_cls, increment)
-    nb_tasks = len(increments)
+    backbone = disjoint_backbone(total_classes, init_cls, increment)
+    if len(backbone) < 2:
+        raise ValueError("Need at least 2 tasks for partial_overlap.")
 
-    t_a, t_b = pair
-    for t in (t_a, t_b):
-        if t < 0 or t >= nb_tasks:
-            raise ValueError(f"Task index {t} out of range [0, {nb_tasks - 1}].")
+    last = backbone[-1]
+    n_echo = max(1, int(round(len(last) * overlap_fraction)))
+    n_fresh = len(last) - n_echo
+    if n_fresh < 1:
+        raise ValueError(
+            "overlap_fraction leaves no fresh classes in the mixed task."
+        )
 
-    task_a_start = sum(increments[:t_a])
-    task_a_classes = list(range(task_a_start, task_a_start + increments[t_a]))
-    n_shared = max(1, int(len(task_a_classes) * overlap_fraction))
-    rng = get_rng(seed)
-    shared = sorted(rng.choice(task_a_classes, size=n_shared, replace=False).tolist())
+    fresh_ids = last[:n_fresh]
+    # Echo ids follow the last fresh real id contiguously, so the head stays
+    # gap-free; they reuse the label slots the dropped real classes vacated.
+    echo_start = fresh_ids[-1] + 1
+    echo_ids = list(range(echo_start, echo_start + n_echo))
+    source_ids = list(backbone[0])[:n_echo]
+    echoes = [
+        EchoSpec(new_id=e, source_id=s, image_relation="new")
+        for e, s in zip(echo_ids, source_ids)
+    ]
 
-    pair_obj = OverlapPair(tasks=(t_a, t_b), shared_classes=shared)
+    mixed_task = fresh_ids + echo_ids
+    task_lists = backbone[:-1] + [mixed_task]
+
     spec = OverlapSpec(
-        mode="partial",
-        pairs=[pair_obj],
-        image_split=ImageSplit(strategy=image_split_strategy),
+        mode="partial_overlap_50",
+        task_class_lists=task_lists,
+        echoes=echoes,
+        total_classes_override=echo_ids[-1] + 1,
         seed=seed,
     )
     spec.validate()
