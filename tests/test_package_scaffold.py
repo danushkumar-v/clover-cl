@@ -16,12 +16,8 @@ def test_package_imports() -> None:
     assert clover.__version__ == "2.0.0.dev0"
 
 
-@pytest.mark.parametrize(
-    "list_fn",
-    [list_datasets, list_methods, list_backbones],
-)
-def test_registries_start_empty(list_fn) -> None:
-    assert list_fn() == []
+def test_methods_registry_is_still_empty_until_p3() -> None:
+    assert list_methods() == []
 
 
 def test_scenario_registry_has_the_6_core_scenarios_since_p1() -> None:
@@ -33,6 +29,14 @@ def test_scenario_registry_has_the_6_core_scenarios_since_p1() -> None:
         "mid_range_revisit",
         "cumulative_drift",
     }
+
+
+def test_dataset_registry_has_the_synthetic_builtin_since_p2() -> None:
+    assert set(list_datasets()) == {"synthetic"}
+
+
+def test_backbone_registry_has_the_tiny_mlp_stub_since_p2() -> None:
+    assert set(list_backbones()) == {"tiny_mlp"}
 
 
 @pytest.mark.parametrize(

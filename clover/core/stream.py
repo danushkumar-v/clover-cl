@@ -7,7 +7,7 @@ from typing import Dict, Iterator, List, Set
 import numpy as np
 
 from clover.core.assignment import assign_images
-from clover.core.experience import Experience
+from clover.core.experience import Experience, LabelSpaceView
 from clover.core.plan import StreamPlan
 from clover.core.planner import resolve
 from clover.core.spec import DatasetInfo, StreamSpec
@@ -143,6 +143,13 @@ def build_experiences(
         image_indices = dict(image_assignment[t])
         n_samples = sum(len(idxs) for idxs in image_indices.values())
 
+        label_space = LabelSpaceView(
+            new_classes=frozenset(first_app),
+            seen_classes=frozenset(seen_so_far),
+            revisiting_classes=frozenset(revisiting),
+            head_size=plan.head_size_schedule[t],
+        )
+
         experiences.append(
             Experience(
                 task_label=t,
@@ -156,6 +163,7 @@ def build_experiences(
                 first_appearance_of=first_app,
                 overlap_with_previous=overlap_with_prev,
                 echo_map=echo_map,
+                label_space=label_space,
                 image_indices=image_indices,
                 n_samples=n_samples,
             )

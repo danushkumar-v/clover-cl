@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from clover.core.experience import Experience
+from clover.core.experience import Experience, LabelSpaceView
 
 
 def _make(revisiting, first_appearance, here=None):
@@ -21,6 +21,12 @@ def _make(revisiting, first_appearance, here=None):
         first_appearance_of=first_appearance,
         overlap_with_previous={},
         echo_map={},
+        label_space=LabelSpaceView(
+            new_classes=frozenset(first_appearance),
+            seen_classes=frozenset(revisiting),
+            revisiting_classes=frozenset(revisiting),
+            head_size=len(here),
+        ),
         image_indices={c: [] for c in here},
         n_samples=0,
     )

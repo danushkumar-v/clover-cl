@@ -11,7 +11,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 
 - [x] **P0 — Scaffold** (SPEC §2): `git pull` to origin/main, branch `v2`; package layout, decorator registries (methods/datasets/scenarios/backbones), pyproject (py≥3.10, torch≥2.0, timm≥1.0), ruff+mypy+pytest config, CI workflow skeleton. DONE: CI green on the empty package (lint + typecheck + pytest collecting 0-or-trivial tests).
 - [x] **P1 — Stream model** (SPEC §3–§4): StreamSpec v2 (`label: same|new`, `images: same|new|partial`, `task_size: fixed|grow`) + validation, planner → serializable StreamPlan, assignment port, Experience/Stream/Benchmark refactor; legacy `OverlapDataManager` API removed, no shim. DONE: golden-plan tests for the 6 core scenario shapes + seed-1993 class-order fixture green; plan/manifest round-trip test green; validation rejects each documented failure mode with actionable message.
-- [ ] **P2 — Label space + loss policies** (SPEC §5): LabelSpaceView on Experience; `methods/losses.py` (`new_class_ce`, `seen_class_ce`, `masked_logits`); synthetic dataset + 2-layer backbone stub; revisit-safety gate with a stub method. DONE: gate fails on a deliberately v1-L2P-broken stub (unmasked `-inf` CE) and passes on the fixed stub, across disjoint / same-id / echo synthetic streams.
+- [x] **P2 — Label space + loss policies** (SPEC §5): LabelSpaceView on Experience; `methods/losses.py` (`new_class_ce`, `seen_class_ce`, `masked_logits`); synthetic dataset + 2-layer backbone stub; revisit-safety gate with a stub method. DONE: gate fails on a deliberately v1-L2P-broken stub (unmasked `-inf` CE) and passes on the fixed stub, across disjoint / same-id / echo synthetic streams.
 - [ ] **P3 — CLMethod + Trainer + SimpleCIL** (SPEC §6.1–6.2): CLMethod ABC, TrainContext, incremental heads, core Trainer (seeding, loop, checkpoints/resume, status.json, per-class evaluator hookup); SimpleCIL end-to-end. DONE: SimpleCIL passes safety gate + smoke on CPU; interrupted-run resume test green; CIFAR-100 disjoint sanity run queued/verified on cluster ≈ published range (record in docs/methods.md).
 - [ ] **P4 — Config + CLI + cluster workflow** (SPEC §9, §11): typed YAML schemas with unknown-key rejection and layered defaults, `config_resolved.yaml`, run-dir artifacts; CLI `run` / `smoke` / `inspect` / `preflight`; smoke profile; `scripts/slurm_run.sh`. DONE: typo'd config fails pre-data naming the key; `clover run <cfg> --profile smoke` and `clover smoke` green on GPU-less CPU in <10 min; sbatch template submits and resumes on Snellius with only `#SBATCH` placeholders filled.
 - [ ] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method.
@@ -89,3 +89,39 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - `Benchmark.from_yaml` / config-driven construction is deferred to P4
   (needs `clover/config`); P1's `Benchmark` is built via
   `clover.core.stream.build_benchmark(spec, dataset_info, class_to_indices)`.
+
+- **2026-07-05, P2:** two pieces pulled forward from their SPEC-assigned
+  phases, confirmed with user before implementing: a minimal `CLDataset` ABC
+  (`clover/datasets/base.py`) + one built-in, `synthetic` (P7/P8's "Dataset
+  layer" originally), and a 2-layer backbone stub, `tiny_mlp`
+  (`clover/backbones/tiny_mlp.py`, P5's "Backbones" originally) — both
+  registered, since SPEC §12.2 frames the synthetic dataset as "built-in"
+  and reused by later phases' smoke profile and trainer/resume tests, not a
+  throwaway fixture. `clover/methods/base.py`/`heads.py` were **not** pulled
+  forward — the gate's stub training-step callables are plain functions,
+  not registered `CLMethod`s, so `clover.methods` stays empty until P3's
+  `SimpleCIL` (unlike datasets/backbones, no plugin needed to exist yet).
+- `masked_logits(logits, targets, view, kind)` concretizes SPEC's
+  illustrative 2-arg `masked_logits(logits, view)` snippet: `kind: "new"|
+  "seen"` derives *both* the logit-column mask and the sample mask from the
+  same id set (`view.new_classes` or `view.seen_classes`), which is what
+  actually makes the v1 bug unrepresentable — a generic `view.logit_mask()`
+  alone (seen|new, kept as a separate public method for eval-time
+  prediction) isn't enough, since new_class_ce needs new-only columns, not
+  everything valid so far.
+- Discovered while building the revisit-safety gate: the v1 masked-logit bug
+  (`logits[:, :known_classes] = -inf` over an unfiltered batch) can only
+  actually fire when an *old-id* sample shares a batch with the blind column
+  mask — true for the same-id revisit shape, but **not** the echo shape,
+  since echo ids are always freshly allocated above every seen id and so
+  never fall inside the masked-out range. This matches `AUDIT.md`'s finding
+  that the bug "lives under cumulative_drift" specifically. The gate
+  reflects this precisely: the broken stub is asserted non-finite only on
+  the same-id shape, and finite (but not necessarily *more* correct) on
+  disjoint and echo — proving the gate correctly localizes the bug rather
+  than just rejecting anything that isn't the fully-fixed implementation.
+- Classifier head in the gate is a single `nn.Linear` preallocated to the
+  plan's final head size (known upfront for the synthetic stream) — no
+  incremental growth. Real incremental head expansion is P3's
+  `methods/heads.py`; growing the head as head_size increases would just be
+  re-deriving that work early for no benefit to P2's own gate.
