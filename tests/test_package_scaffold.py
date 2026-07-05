@@ -18,10 +18,21 @@ def test_package_imports() -> None:
 
 @pytest.mark.parametrize(
     "list_fn",
-    [list_datasets, list_scenarios, list_methods, list_backbones],
+    [list_datasets, list_methods, list_backbones],
 )
 def test_registries_start_empty(list_fn) -> None:
     assert list_fn() == []
+
+
+def test_scenario_registry_has_the_6_core_scenarios_since_p1() -> None:
+    assert set(list_scenarios()) == {
+        "disjoint_baseline",
+        "exact_replay",
+        "partial_overlap",
+        "long_range_revisit",
+        "mid_range_revisit",
+        "cumulative_drift",
+    }
 
 
 @pytest.mark.parametrize(

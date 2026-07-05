@@ -10,7 +10,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 "Log" below before ticking.
 
 - [x] **P0 — Scaffold** (SPEC §2): `git pull` to origin/main, branch `v2`; package layout, decorator registries (methods/datasets/scenarios/backbones), pyproject (py≥3.10, torch≥2.0, timm≥1.0), ruff+mypy+pytest config, CI workflow skeleton. DONE: CI green on the empty package (lint + typecheck + pytest collecting 0-or-trivial tests).
-- [ ] **P1 — Stream model** (SPEC §3–§4): StreamSpec v2 (`label: same|new`, `images: same|new|partial`, `task_size: fixed|grow`) + validation, planner → serializable StreamPlan, assignment port, Experience/Stream/Benchmark refactor; legacy `OverlapDataManager` API removed, no shim. DONE: golden-plan tests for the 6 core scenario shapes + seed-1993 class-order fixture green; plan/manifest round-trip test green; validation rejects each documented failure mode with actionable message.
+- [x] **P1 — Stream model** (SPEC §3–§4): StreamSpec v2 (`label: same|new`, `images: same|new|partial`, `task_size: fixed|grow`) + validation, planner → serializable StreamPlan, assignment port, Experience/Stream/Benchmark refactor; legacy `OverlapDataManager` API removed, no shim. DONE: golden-plan tests for the 6 core scenario shapes + seed-1993 class-order fixture green; plan/manifest round-trip test green; validation rejects each documented failure mode with actionable message.
 - [ ] **P2 — Label space + loss policies** (SPEC §5): LabelSpaceView on Experience; `methods/losses.py` (`new_class_ce`, `seen_class_ce`, `masked_logits`); synthetic dataset + 2-layer backbone stub; revisit-safety gate with a stub method. DONE: gate fails on a deliberately v1-L2P-broken stub (unmasked `-inf` CE) and passes on the fixed stub, across disjoint / same-id / echo synthetic streams.
 - [ ] **P3 — CLMethod + Trainer + SimpleCIL** (SPEC §6.1–6.2): CLMethod ABC, TrainContext, incremental heads, core Trainer (seeding, loop, checkpoints/resume, status.json, per-class evaluator hookup); SimpleCIL end-to-end. DONE: SimpleCIL passes safety gate + smoke on CPU; interrupted-run resume test green; CIFAR-100 disjoint sanity run queued/verified on cluster ≈ published range (record in docs/methods.md).
 - [ ] **P4 — Config + CLI + cluster workflow** (SPEC §9, §11): typed YAML schemas with unknown-key rejection and layered defaults, `config_resolved.yaml`, run-dir artifacts; CLI `run` / `smoke` / `inspect` / `preflight`; smoke profile; `scripts/slurm_run.sh`. DONE: typo'd config fails pre-data naming the key; `clover run <cfg> --profile smoke` and `clover smoke` green on GPU-less CPU in <10 min; sbatch template submits and resumes on Snellius with only `#SBATCH` placeholders filled.
@@ -43,3 +43,49 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   Also rebuilt the local `.venv` (was pointing at a since-removed Python
   3.13.7 install from an unrelated project) on Python 3.11 to satisfy the
   new `py>=3.10` requirement.
+
+- **2026-07-05, P1:** v1 turned out to have *two* untested-against-each-other
+  mechanisms for revisits: `StreamSpec`/`RevisitSpec` compiled to same-id
+  `OverlapPair`s via a generic placement engine that was never actually
+  exercised by the 6 scenario modules, which instead built bespoke
+  `EchoSpec`/`task_class_lists` by hand (confirmed by reading v1 source from
+  `main`'s history — `test_echo_classes.py` only tested the hand-built
+  `build_spec()` path). SPEC.md's unification is therefore new design, not a
+  port, and the 6 v2 scenario factories are **not** bit-for-bit reproductions
+  of v1's per-scenario id arithmetic (e.g. v1's `partial_overlap` silently
+  discarded some real classes near the tail to make room for echoes; v2's
+  general engine never discards anything real that's actually needed).
+  Golden-plan tests (`tests/test_scenarios.py`) assert the invariants that
+  matter for each scenario's *purpose* (fixed task size, contiguous ids,
+  correct echo/same/image semantics, correct head sizes) rather than exact
+  id-list equality — matching how v1's own tests worked (structural
+  invariants against a synthetic dataset, not a frozen fixture; only the
+  disjoint seed-1993 class order is a frozen byte-equivalence fixture).
+- Unifying mechanism (`clover/core/planner.py:resolve`): one monotonically
+  increasing label-id cursor is shared between "draw the next real class"
+  and "allocate the next echo id." Under `task_size="fixed"`, a revisit
+  occurrence reduces its target experience's genuinely-new-class draw by
+  exactly the number of occurrences landing there (no eviction — a budget
+  decision made before assignment, never a displacement of an
+  already-placed class); if occurrences exceed the budget, that's the named
+  "class-budget overflow" failure. Echo ids allocated for a shortfall
+  therefore fill the id-space gap immediately (contiguity holds by
+  construction) instead of starting from a separate counter — this
+  generalizes the trick v1's own `partial_overlap.build_spec` used by hand
+  (`echo_start = fresh_ids[-1] + 1`).
+- `StreamSpec.validate()` is structural only (types/ranges/enums/unknown
+  keys); plan-time feasibility (min_gap vs. stream length, class-budget
+  overflow, contiguous first-appearance) is checked in `planner.resolve()`,
+  mirroring where these checks actually lived in v1 (`stream_builder`, not
+  `stream_spec.validate()`).
+- `_pilot_class_order` in `planner.py` is the sole sanctioned exception to
+  CLAUDE.md's "no bare `np.random.*`" rule (byte-compat with the frozen
+  seed-1993 fixture) — this exception already existed in v1's own
+  `seeding.py` docstring, so it's carried forward, not newly introduced.
+- `Experience.dataset` is a plain dataset-name `str`, not a live
+  `torch.utils.data.Dataset` (v1's design) — keeps `clover/core` free of
+  torch/I/O; wrapping `image_indices` into an actual per-experience Dataset
+  is a P3/dataset-layer concern once real data exists (P7/P8).
+- `Benchmark.from_yaml` / config-driven construction is deferred to P4
+  (needs `clover/config`); P1's `Benchmark` is built via
+  `clover.core.stream.build_benchmark(spec, dataset_info, class_to_indices)`.

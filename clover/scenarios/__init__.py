@@ -1,7 +1,7 @@
 """Scenario plugins: named StreamSpec factories (SPEC §8).
 
-This module only wires up the registry; scenario factories are added
-starting P1 (the 6 core scenarios) with extras in P8.
+The 6 core scenarios (P1) are imported below to trigger their
+``@register_scenario`` registration; extras land in P8.
 """
 
 from __future__ import annotations
@@ -15,3 +15,23 @@ get_scenario = _registry.get
 list_scenarios = _registry.list
 
 __all__ = ["register_scenario", "get_scenario", "list_scenarios"]
+
+# Imported for registration side effects only; must come after the
+# register_scenario binding above, since each module imports it back.
+from clover.scenarios import (  # noqa: E402
+    cumulative_drift,
+    disjoint_baseline,
+    exact_replay,
+    long_range_revisit,
+    mid_range_revisit,
+    partial_overlap,
+)
+
+__all__ += [
+    "cumulative_drift",
+    "disjoint_baseline",
+    "exact_replay",
+    "long_range_revisit",
+    "mid_range_revisit",
+    "partial_overlap",
+]
