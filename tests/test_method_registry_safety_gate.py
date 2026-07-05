@@ -49,10 +49,22 @@ def _echo_at_end_spec() -> StreamSpec:
     )
 
 
+def _cumulative_drift_spec() -> StreamSpec:
+    return StreamSpec(
+        dataset="synthetic",
+        init_cls=INIT_CLS,
+        increment=INCREMENT,
+        revisits=[
+            RevisitSpec(classes=[0, 1], placement="every_task", label="same", images="new", min_gap=1)
+        ],
+    )
+
+
 SHAPES = {
     "disjoint": _disjoint_spec,
     "same_id_mid_stream": _same_id_mid_stream_spec,
     "echo_at_end": _echo_at_end_spec,
+    "cumulative_drift": _cumulative_drift_spec,
 }
 
 
@@ -66,6 +78,9 @@ def _revisit_check_experience(benchmark, shape_name):
     if shape_name == "echo_at_end":
         train_exp = benchmark.train_stream[-1]
         return benchmark.test_stream[-1], set(train_exp.echo_map)
+    if shape_name == "cumulative_drift":
+        train_exp = benchmark.train_stream[-1]
+        return benchmark.test_stream[-1], set(train_exp.revisiting_classes)
     raise AssertionError(f"unknown shape {shape_name!r}")
 
 
@@ -81,7 +96,11 @@ def test_registered_method_passes_revisit_safety_gate(tmp_path, method_name, sha
     )
 
     method = get_method(method_name)()
-    trainer = Trainer(method, benchmark, train_ds, test_ds, RunConfig(run_dir=str(tmp_path), seed=42))
+    # epochs/lr tuned for gradient-trained methods (L2P) to reliably clear
+    # chance on this tiny, randomly-initialized-backbone setup; harmless
+    # for SimpleCIL, which ignores both (single closed-form pass).
+    run_config = RunConfig(run_dir=str(tmp_path), seed=42, epochs=40, optimizer_lr=1e-2)
+    trainer = Trainer(method, benchmark, train_ds, test_ds, run_config)
     trainer.run()
 
     classifier = method.classifier()

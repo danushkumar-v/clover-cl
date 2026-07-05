@@ -64,6 +64,7 @@ class RunConfig:
     amp: bool = False
     optimizer_name: str = "adam"
     optimizer_lr: float = 1e-3
+    epochs: int = 1
 
 
 #: The one place optimizer names are mapped to classes -- clover/config's
@@ -163,6 +164,7 @@ class Trainer:
             device=device,
             amp=self.config.amp,
             optimizer_factory=lambda params: optimizer_cls(params, lr=optimizer_lr),
+            epochs=self.config.epochs,
         )
 
         stream_info = StreamInfo(

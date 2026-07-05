@@ -45,13 +45,19 @@ class TrainContext:
     method passes it, configured from ``training.optimizer`` (SPEC: "ctx
     provides... optimizer/scheduler factories from config"). Unexercised by
     SimpleCIL (no gradient step) but real plumbing for gradient-trained
-    methods (P5+). No scheduler factory yet -- no method needs one either.
+    methods. No scheduler factory yet -- no method needs one either.
+
+    ``epochs`` (from ``training.epochs``) was plumbed as a config field in
+    P4 but never actually threaded through to a method -- SimpleCIL has no
+    per-experience loop to repeat. L2P (P5) is the first method that needs
+    it.
     """
 
     device: torch.device
     amp: bool = False
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("clover.training"))
     optimizer_factory: Optional[Callable[[Iterable[nn.Parameter]], torch.optim.Optimizer]] = None
+    epochs: int = 1
 
 
 class CLMethod(ABC):

@@ -1,8 +1,8 @@
 """Backbone plugins: config-selectable base models + ViT wrappers (SPEC §6.4).
 
-``tiny_mlp`` (P2, SPEC §12.2) is a fast CPU stub for tests; the real
-config-selectable registry (timm/HF names) and prompt-pool/prefix/adapter
-wrappers land in P5.
+``tiny_mlp`` (P2) and ``tiny_vit``/``vit_prompt_pool`` (P5) are fast CPU
+stand-ins for tests; the real config-selectable base-model resolution
+(timm/HF name or a user class) lives in ``clover/backbones/loader.py``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ list_backbones = _registry.list
 __all__ = ["register_backbone", "get_backbone", "list_backbones"]
 
 # Imported for registration side effects only; must come after the
-# register_backbone binding above, since the module imports it back.
-from clover.backbones import tiny_mlp  # noqa: E402
+# register_backbone binding above, since these modules import it back.
+from clover.backbones import prompt_pool, tiny_mlp, vit  # noqa: E402
 
-__all__ += ["tiny_mlp"]
+__all__ += ["tiny_mlp", "vit", "prompt_pool"]

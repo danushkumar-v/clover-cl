@@ -11,6 +11,7 @@ def test_smoke_runs_every_registered_method_successfully(capsys):
 
     out = capsys.readouterr().out
     assert "simplecil OK" in out
+    assert "l2p OK" in out
 
 
 def test_smoke_reports_failure_and_nonzero_exit_for_a_broken_method(monkeypatch, capsys):
@@ -24,6 +25,7 @@ def test_smoke_reports_failure_and_nonzero_exit_for_a_broken_method(monkeypatch,
     exit_code = main(["smoke"])
     assert exit_code == 1
 
+    # smoke stops at the first failure -- "l2p" sorts first alphabetically.
     err = capsys.readouterr().err
-    assert "simplecil FAILED" in err
+    assert "l2p FAILED" in err
     assert "exploded" in err

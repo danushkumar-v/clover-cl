@@ -47,6 +47,7 @@ def _build_run_config(resolved: ResolvedConfig, run_dir: str) -> RunConfig:
         amp=resolved.training.amp != "none",
         optimizer_name=optimizer.name if optimizer else "adam",
         optimizer_lr=optimizer.lr if optimizer else 1e-3,
+        epochs=resolved.training.epochs,
     )
 
 

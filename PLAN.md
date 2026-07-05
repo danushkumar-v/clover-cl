@@ -14,7 +14,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - [x] **P2 — Label space + loss policies** (SPEC §5): LabelSpaceView on Experience; `methods/losses.py` (`new_class_ce`, `seen_class_ce`, `masked_logits`); synthetic dataset + 2-layer backbone stub; revisit-safety gate with a stub method. DONE: gate fails on a deliberately v1-L2P-broken stub (unmasked `-inf` CE) and passes on the fixed stub, across disjoint / same-id / echo synthetic streams.
 - [x] **P3 — CLMethod + Trainer + SimpleCIL** (SPEC §6.1–6.2): CLMethod ABC, TrainContext, incremental heads, core Trainer (seeding, loop, checkpoints/resume, status.json, per-class evaluator hookup); SimpleCIL end-to-end. DONE: SimpleCIL passes safety gate + smoke on CPU; interrupted-run resume test green; CIFAR-100 disjoint sanity run queued/verified on cluster ≈ published range (record in docs/methods.md). **CIFAR-100-on-cluster leg deferred — see Log.**
 - [x] **P4 — Config + CLI + cluster workflow** (SPEC §9, §11): typed YAML schemas with unknown-key rejection and layered defaults, `config_resolved.yaml`, run-dir artifacts; CLI `run` / `smoke` / `inspect` / `preflight`; smoke profile; `scripts/slurm_run.sh`. DONE: typo'd config fails pre-data naming the key; `clover run <cfg> --profile smoke` and `clover smoke` green on GPU-less CPU in <10 min; sbatch template submits and resumes on Snellius with only `#SBATCH` placeholders filled. **Actual Snellius submission unverified — see Log.**
-- [ ] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method.
+- [ ] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method. **IN PROGRESS — backbone registry + L2P done, DualPrompt/CODA-Prompt queued next — see Log. Not ticked.**
 - [ ] **P6 — Remaining methods** (SPEC §6.5): APER-Adapter, EASE, RanPAC, MOS, TUNA (adapter wrappers as needed); hyperparameter defaults carried from bench configs with provenance notes. DONE: each passes safety gate + smoke + disjoint CIFAR-100 sanity vs. published range; comparison table in docs/methods.md covers all 9.
 - [ ] **P7 — Metrics + reporting + matrix** (SPEC §10): per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) + CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware) metrics ported with fixture tests; `clover report`; `run-matrix` orchestrator (resume/retry/stale/GPU-pool). DONE: hand-computed metric fixtures green; two-method synthetic demo report renders in CI; matrix resume test green.
 - [ ] **P8 — Datasets + extras + docs** (SPEC §7, §8, §13): CUB-200, ImageNet-R/A, OmniBenchmark, VTAB wrappers + staging docs; `image_folder` config-only dataset; scenario extras as capacity allows; docs/concepts.md, docs/extending.md (method/dataset/scenario/backbone worked examples). DONE: built-in metadata smoke tests green; a tutorial-followed custom dataset runs a full smoke benchmark without touching core.
@@ -198,3 +198,64 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   fixed, not suppressed away, since they were real (if minor) type-safety
   gaps that happened to be invisible before this phase's import graph
   connected config to them.
+
+- **2026-07-06, P5 (in progress, not ticked):** researched (read-only,
+  `clover-pilot-bench`, no code copied) confirmed L2P/DualPrompt/CODA-Prompt
+  are three genuinely different mechanisms, not variations of one: L2P
+  prepends top-k-selected prompts as extra input tokens (no attention
+  surgery); DualPrompt and CODA-Prompt both splice prefix key/value pairs
+  into specific attention blocks (DualPrompt: hard top-k task-conditioned
+  pool + an always-on general prompt; CODA-Prompt: soft attention-weighted
+  combination of every pool component, no top-k, plus Gram-Schmidt
+  orthogonalization of new slots). Building and testing all three in one
+  pass risked exactly the kind of subtle bug this project keeps finding
+  when work is incremental (P3's DataLoader-RNG bug, P4's mypy import
+  surface) — confirmed with user: **this session delivers the shared
+  infrastructure + L2P complete and tested; DualPrompt and CODA-Prompt are
+  the queued next continuation of this same phase**, reusing the
+  prefix-KV hook L2P leaves built but unexercised
+  (`TinyViT.forward_tokens`/`Attention.forward`'s `prefix_kv` parameter,
+  covered by `tests/test_tiny_vit.py`'s hook tests even though no method
+  uses it yet).
+- Also confirmed via the same research: the real L2P/DualPrompt/CODA-Prompt
+  masked-loss bug (`logits[:, :known_classes] = -inf` then a plain
+  unfiltered `cross_entropy`) is exactly what P2's `new_class_ce`/
+  `seen_class_ce` structurally prevents (confirmed unpatched in the bench
+  for these three specifically — only `ease`/`tuna`/`mos` were patched) —
+  validates the P2 design, nothing to change.
+- `clover/backbones/vit.py`'s `TinyViT` is a clean-room minimal ViT sized
+  for the 8x8 synthetic dataset (patch_size=4, 2x2=4 patches) — a randomly
+  initialized, never-pretrained stand-in, unlike the real method's
+  pretrained-ImageNet-ViT assumption. Empirically, L2P's default
+  `training.optimizer.lr=1e-3`/`epochs=1` was too weak for the prompt pool
+  to converge against this random backbone (one round hit exactly 0%
+  accuracy on its own just-trained classes — verified via direct
+  debugging this was an undertrained-hyperparameters issue, not a gradient
+  -flow bug, by confirming a fully-unfrozen TinyViT+head fits the same
+  data to 100% in ~20 steps). The registry-driven safety gate
+  (`tests/test_method_registry_safety_gate.py`) now uses `epochs=40,
+  optimizer_lr=1e-2` for both methods (harmless to SimpleCIL, which
+  ignores both) — real cluster configs against an actual pretrained timm
+  ViT would tune these separately.
+- `training.epochs` was added to `TrainingSection` in P4 but never actually
+  threaded through to a method — SimpleCIL has no per-experience loop to
+  repeat, so the gap was invisible until L2P (the first real gradient loop)
+  needed it. Fixed: `TrainContext.epochs` (default 1) and
+  `RunConfig.epochs`, wired through `Trainer.run()` and `cli.py`'s
+  `_build_run_config`.
+- `clover.backbones` registry semantics settled precisely: registry keys
+  are either complete usable backbones (`tiny_mlp`, `tiny_vit` -- no
+  wrapping needed) or mechanism wrappers over a resolved base model
+  (`vit_prompt_pool`, taking `base_model: str` resolved via
+  `clover/backbones/loader.py:resolve_base_model` -- registry-first, timm
+  name fallback, `source="class"` for a user class). Base models
+  themselves are never registered as such; only complete backbones and
+  wrapper mechanisms are.
+- L2P's auxiliary key-pulling loss term (encouraging a selected key to
+  match its query, present in the real method) is omitted for this
+  session's scope -- the top-k selection itself is non-differentiable
+  w.r.t. which indices are chosen regardless, so this only affects how
+  well the *keys* specialize over time, not correctness. Matches SPEC's
+  "faithful-to-the-published-method, not bit-reproduction" bar; worth
+  adding when DualPrompt/CODA-Prompt's key/attention-vector training makes
+  it more directly comparable.
