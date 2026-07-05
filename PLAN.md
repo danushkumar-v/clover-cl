@@ -13,7 +13,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - [x] **P1 — Stream model** (SPEC §3–§4): StreamSpec v2 (`label: same|new`, `images: same|new|partial`, `task_size: fixed|grow`) + validation, planner → serializable StreamPlan, assignment port, Experience/Stream/Benchmark refactor; legacy `OverlapDataManager` API removed, no shim. DONE: golden-plan tests for the 6 core scenario shapes + seed-1993 class-order fixture green; plan/manifest round-trip test green; validation rejects each documented failure mode with actionable message.
 - [x] **P2 — Label space + loss policies** (SPEC §5): LabelSpaceView on Experience; `methods/losses.py` (`new_class_ce`, `seen_class_ce`, `masked_logits`); synthetic dataset + 2-layer backbone stub; revisit-safety gate with a stub method. DONE: gate fails on a deliberately v1-L2P-broken stub (unmasked `-inf` CE) and passes on the fixed stub, across disjoint / same-id / echo synthetic streams.
 - [x] **P3 — CLMethod + Trainer + SimpleCIL** (SPEC §6.1–6.2): CLMethod ABC, TrainContext, incremental heads, core Trainer (seeding, loop, checkpoints/resume, status.json, per-class evaluator hookup); SimpleCIL end-to-end. DONE: SimpleCIL passes safety gate + smoke on CPU; interrupted-run resume test green; CIFAR-100 disjoint sanity run queued/verified on cluster ≈ published range (record in docs/methods.md). **CIFAR-100-on-cluster leg deferred — see Log.**
-- [ ] **P4 — Config + CLI + cluster workflow** (SPEC §9, §11): typed YAML schemas with unknown-key rejection and layered defaults, `config_resolved.yaml`, run-dir artifacts; CLI `run` / `smoke` / `inspect` / `preflight`; smoke profile; `scripts/slurm_run.sh`. DONE: typo'd config fails pre-data naming the key; `clover run <cfg> --profile smoke` and `clover smoke` green on GPU-less CPU in <10 min; sbatch template submits and resumes on Snellius with only `#SBATCH` placeholders filled.
+- [x] **P4 — Config + CLI + cluster workflow** (SPEC §9, §11): typed YAML schemas with unknown-key rejection and layered defaults, `config_resolved.yaml`, run-dir artifacts; CLI `run` / `smoke` / `inspect` / `preflight`; smoke profile; `scripts/slurm_run.sh`. DONE: typo'd config fails pre-data naming the key; `clover run <cfg> --profile smoke` and `clover smoke` green on GPU-less CPU in <10 min; sbatch template submits and resumes on Snellius with only `#SBATCH` placeholders filled. **Actual Snellius submission unverified — see Log.**
 - [ ] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method.
 - [ ] **P6 — Remaining methods** (SPEC §6.5): APER-Adapter, EASE, RanPAC, MOS, TUNA (adapter wrappers as needed); hyperparameter defaults carried from bench configs with provenance notes. DONE: each passes safety gate + smoke + disjoint CIFAR-100 sanity vs. published range; comparison table in docs/methods.md covers all 9.
 - [ ] **P7 — Metrics + reporting + matrix** (SPEC §10): per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) + CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware) metrics ported with fixture tests; `clover report`; `run-matrix` orchestrator (resume/retry/stale/GPU-pool). DONE: hand-computed metric fixtures green; two-method synthetic demo report renders in CI; matrix resume test green.
@@ -164,3 +164,37 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   restoring true bit-identical resume reproducibility. Worth remembering
   for any future Trainer changes: never let per-experience randomness draw
   from the global RNG.
+
+- **2026-07-06, P4:** the sbatch-submits-and-resumes-on-Snellius leg of the
+  DONE criteria is **unverified** — this session has no Snellius access.
+  `scripts/slurm_run.sh` is written per SPEC §11.1 (placeholder `#SBATCH`
+  values, module/venv hook, `clover run "$1"`, resume-by-resubmission
+  relying on `Trainer`'s existing checkpoint detection — no separate
+  `--resume` flag needed), but its actual submission/resume behavior on the
+  real cluster needs the user to try it once they fill in the site-specific
+  placeholders. Not a false-checked box.
+- Per-method typed config schemas (SPEC's "each method declares a typed
+  schema") are deferred: `MethodSection.extra` passes through untyped to
+  `CLMethod.build(stream_info, cfg)` since only SimpleCIL exists and it has
+  no config knobs beyond an optional backbone-name override. Revisit once
+  P5/P6 add methods with real hyperparameters (prompt_pool_size, etc.).
+- `training.amp` is validated against `{"none","bf16","fp16"}` but only
+  collapses to a bool for `TrainContext.amp` (`amp != "none"`) — no
+  autocast wrapping exists anywhere yet since no gradient-trained method
+  exists (SimpleCIL has no training step at all). Finer bf16-vs-fp16
+  dtype handling is deferred to whichever phase adds one.
+- Extracted `clover/utils/strict_dict.py` (`reject_unknown_keys`) from
+  `clover/core/spec.py`'s previously-private `_unknown_key_error`, now
+  shared with the config schemas — one implementation of the "did you
+  mean" pattern used in `RevisitSpec`/`StreamSpec` and every config
+  section, instead of a second copy.
+- `clover/config` importing from `clover/training` (for
+  `OPTIMIZER_FACTORIES`, so an unknown optimizer name is a config-resolve
+  error, not a `KeyError` deep inside a run) pulled `clover/methods` and
+  `clover/training` transitively into the `mypy clover/core clover/config`
+  gate for the first time, surfacing two pre-existing type gaps from P3
+  (an `Any`-typed backbone attribute access in `SimpleCIL.build`, and an
+  `Optional[int]` narrowing gap in `Trainer.run`'s resume branch) — both
+  fixed, not suppressed away, since they were real (if minor) type-safety
+  gaps that happened to be invisible before this phase's import graph
+  connected config to them.

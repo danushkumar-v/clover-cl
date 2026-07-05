@@ -49,10 +49,12 @@ class SimpleCIL(CLMethod):
 
     def build(self, stream_info: StreamInfo, cfg: Dict[str, Any]) -> None:
         backbone_cls = get_backbone(cfg.get("backbone", self.default_backbone))
-        self.backbone = backbone_cls(input_size=stream_info.input_size)
-        self.backbone.requires_grad_(False)
-        self.backbone.eval()
-        self.head = IncrementalHead(self.backbone.feature_dim, cosine=True)
+        backbone: nn.Module = backbone_cls(input_size=stream_info.input_size)
+        backbone.requires_grad_(False)
+        backbone.eval()
+        self.backbone = backbone
+        feature_dim: int = backbone.feature_dim  # type: ignore[assignment]
+        self.head = IncrementalHead(feature_dim, cosine=True)
 
     def before_experience(self, exp: Experience, ctx: TrainContext) -> None:
         assert self.head is not None

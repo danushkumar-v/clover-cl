@@ -7,10 +7,11 @@ original id kept), not a mechanism choice.
 
 from __future__ import annotations
 
-import difflib
 import re
 from dataclasses import dataclass, field
 from typing import Any, Union
+
+from clover.utils.strict_dict import reject_unknown_keys
 
 _PLACEMENTS = frozenset({"random", "spaced", "end_of_stream", "clustered", "every_task"})
 _LABELS = frozenset({"new", "same"})
@@ -50,15 +51,6 @@ class ImageRelation:
         raise ValueError(
             f"images must be 'same', 'new', or 'partial:<pct>' (0<=pct<=1), got {raw!r}."
         )
-
-
-def _unknown_key_error(unknown: set[str], allowed: frozenset[str], kind: str) -> str:
-    parts = []
-    for key in sorted(unknown):
-        suggestion = difflib.get_close_matches(key, allowed, n=1)
-        hint = f" did you mean {suggestion[0]!r}?" if suggestion else ""
-        parts.append(f"unknown {kind} spec key {key!r}.{hint}")
-    return " ".join(parts) + f" allowed keys: {sorted(allowed)}"
 
 
 @dataclass
@@ -120,9 +112,7 @@ class RevisitSpec:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "RevisitSpec":
-        unknown = set(raw) - cls._ALLOWED_KEYS
-        if unknown:
-            raise ValueError(_unknown_key_error(unknown, cls._ALLOWED_KEYS, "revisit"))
+        reject_unknown_keys(raw, cls._ALLOWED_KEYS, "revisit spec")
         rv = cls(
             classes=raw["classes"],
             placement=raw.get("placement", "random"),
@@ -191,9 +181,7 @@ class StreamSpec:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "StreamSpec":
-        unknown = set(raw) - cls._ALLOWED_KEYS
-        if unknown:
-            raise ValueError(_unknown_key_error(unknown, cls._ALLOWED_KEYS, "stream"))
+        reject_unknown_keys(raw, cls._ALLOWED_KEYS, "stream spec")
         revisits = [RevisitSpec.from_dict(r) for r in raw.get("revisits", [])]
         spec = cls(
             dataset=raw["dataset"],

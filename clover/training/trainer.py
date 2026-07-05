@@ -62,6 +62,14 @@ class RunConfig:
     batch_size: int = 32
     device: str = "cpu"
     amp: bool = False
+    optimizer_name: str = "adam"
+    optimizer_lr: float = 1e-3
+
+
+#: The one place optimizer names are mapped to classes -- clover/config's
+#: OptimizerConfig validates against this same set, so an unknown optimizer
+#: name is a config error at resolve time, not a KeyError deep in a run.
+OPTIMIZER_FACTORIES = {"adam": torch.optim.Adam, "sgd": torch.optim.SGD, "adamw": torch.optim.AdamW}
 
 
 def _seed_everything(seed: int) -> None:
@@ -149,7 +157,13 @@ class Trainer:
         _seed_everything(self.config.seed)
 
         device = torch.device(self.config.device)
-        ctx = TrainContext(device=device, amp=self.config.amp)
+        optimizer_cls = OPTIMIZER_FACTORIES[self.config.optimizer_name]
+        optimizer_lr = self.config.optimizer_lr
+        ctx = TrainContext(
+            device=device,
+            amp=self.config.amp,
+            optimizer_factory=lambda params: optimizer_cls(params, lr=optimizer_lr),
+        )
 
         stream_info = StreamInfo(
             dataset=self.benchmark.spec.dataset,
@@ -163,16 +177,16 @@ class Trainer:
         test_experiences = list(self.benchmark.test_stream)
 
         latest_task = self._latest_completed_task()
-        resume_from = 0 if latest_task is None else latest_task + 1
-
-        if resume_from > 0:
+        if latest_task is None:
+            resume_from = 0
+            r_matrix = RMatrix(self.benchmark.nb_experiences)
+        else:
+            resume_from = latest_task + 1
             for exp in train_experiences[:resume_from]:
                 self.method.before_experience(exp, ctx)
             checkpoint = torch.load(self._checkpoint_path(latest_task), weights_only=False)
             self.method.load_state_dict(checkpoint["method_state"])
             r_matrix = RMatrix.from_array(checkpoint["r_matrix"])
-        else:
-            r_matrix = RMatrix(self.benchmark.nb_experiences)
 
         self._write_status("running", resume_from - 1)
 

@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.4", "pytest-cov", "ruff", "mypy"]
+dev = ["pytest>=7.4", "pytest-cov", "ruff", "mypy", "types-PyYAML"]
 
 [project.scripts]
 clover = "clover.cli:main"

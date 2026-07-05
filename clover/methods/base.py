@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Dict
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, Iterable, Optional
 
 import torch
 import torch.nn as nn
@@ -39,11 +39,19 @@ class StreamInfo:
 
 @dataclass
 class TrainContext:
-    """Per-run context threaded through every lifecycle hook."""
+    """Per-run context threaded through every lifecycle hook.
+
+    ``optimizer_factory`` builds an optimizer over whatever parameters a
+    method passes it, configured from ``training.optimizer`` (SPEC: "ctx
+    provides... optimizer/scheduler factories from config"). Unexercised by
+    SimpleCIL (no gradient step) but real plumbing for gradient-trained
+    methods (P5+). No scheduler factory yet -- no method needs one either.
+    """
 
     device: torch.device
     amp: bool = False
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("clover.training"))
+    optimizer_factory: Optional[Callable[[Iterable[nn.Parameter]], torch.optim.Optimizer]] = None
 
 
 class CLMethod(ABC):
