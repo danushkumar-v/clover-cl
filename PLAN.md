@@ -14,7 +14,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - [x] **P2 — Label space + loss policies** (SPEC §5): LabelSpaceView on Experience; `methods/losses.py` (`new_class_ce`, `seen_class_ce`, `masked_logits`); synthetic dataset + 2-layer backbone stub; revisit-safety gate with a stub method. DONE: gate fails on a deliberately v1-L2P-broken stub (unmasked `-inf` CE) and passes on the fixed stub, across disjoint / same-id / echo synthetic streams.
 - [x] **P3 — CLMethod + Trainer + SimpleCIL** (SPEC §6.1–6.2): CLMethod ABC, TrainContext, incremental heads, core Trainer (seeding, loop, checkpoints/resume, status.json, per-class evaluator hookup); SimpleCIL end-to-end. DONE: SimpleCIL passes safety gate + smoke on CPU; interrupted-run resume test green; CIFAR-100 disjoint sanity run queued/verified on cluster ≈ published range (record in docs/methods.md). **CIFAR-100-on-cluster leg deferred — see Log.**
 - [x] **P4 — Config + CLI + cluster workflow** (SPEC §9, §11): typed YAML schemas with unknown-key rejection and layered defaults, `config_resolved.yaml`, run-dir artifacts; CLI `run` / `smoke` / `inspect` / `preflight`; smoke profile; `scripts/slurm_run.sh`. DONE: typo'd config fails pre-data naming the key; `clover run <cfg> --profile smoke` and `clover smoke` green on GPU-less CPU in <10 min; sbatch template submits and resumes on Snellius with only `#SBATCH` placeholders filled. **Actual Snellius submission unverified — see Log.**
-- [ ] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method. **IN PROGRESS — backbone registry + L2P done, DualPrompt/CODA-Prompt queued next — see Log. Not ticked.**
+- [ ] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method. **IN PROGRESS — backbone registry + L2P + DualPrompt done, CODA-Prompt queued next — see Log. Not ticked.**
 - [ ] **P6 — Remaining methods** (SPEC §6.5): APER-Adapter, EASE, RanPAC, MOS, TUNA (adapter wrappers as needed); hyperparameter defaults carried from bench configs with provenance notes. DONE: each passes safety gate + smoke + disjoint CIFAR-100 sanity vs. published range; comparison table in docs/methods.md covers all 9.
 - [ ] **P7 — Metrics + reporting + matrix** (SPEC §10): per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) + CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware) metrics ported with fixture tests; `clover report`; `run-matrix` orchestrator (resume/retry/stale/GPU-pool). DONE: hand-computed metric fixtures green; two-method synthetic demo report renders in CI; matrix resume test green.
 - [ ] **P8 — Datasets + extras + docs** (SPEC §7, §8, §13): CUB-200, ImageNet-R/A, OmniBenchmark, VTAB wrappers + staging docs; `image_folder` config-only dataset; scenario extras as capacity allows; docs/concepts.md, docs/extending.md (method/dataset/scenario/backbone worked examples). DONE: built-in metadata smoke tests green; a tutorial-followed custom dataset runs a full smoke benchmark without touching core.
@@ -259,3 +259,31 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   "faithful-to-the-published-method, not bit-reproduction" bar; worth
   adding when DualPrompt/CODA-Prompt's key/attention-vector training makes
   it more directly comparable.
+
+- **2026-07-06, P5 continued (still in progress, not ticked): DualPrompt
+  done.** Extracted `clover/methods/prompt_common.py:PromptMethodBase`
+  (build/before_experience/train_experience/classifier/state_dict/
+  load_state_dict) out of `l2p.py` once a second method needed the
+  identical scaffolding — L2P and DualPrompt now differ only in
+  `default_backbone`; CODA-Prompt (next) will be a third 3-line subclass.
+  Confirmed no behavior change: L2P's existing tests pass unmodified
+  against the refactored class.
+- `clover/backbones/dual_prompt.py:DualPromptViT` implements the general
+  prompt (always-on, fixed shallow layer(s)) + expert prompt pool
+  (top-k-selected, deeper layer(s)) as **prefix key/value pairs** spliced
+  into specific attention blocks via `TinyViT`'s `prefix_kv` hook (built in
+  the L2P pass, unexercised until now) — the mechanism L2P's plain
+  token-prepend doesn't need. `g_layers`/`e_layers` must be disjoint and
+  within the base's depth (validated, actionable error). Default
+  `g_layers=(0,)`/`e_layers=(1,)` fit `TinyViT`'s default `depth=2` with no
+  extra config.
+- Unlike L2P's debugging detour, DualPrompt worked correctly on the first
+  full end-to-end run with the same tuned hyperparameters (epochs=40,
+  optimizer_lr=1e-2) — diagonal accuracies 0.93-1.0 across all experiences,
+  actually more stable than L2P's. Registry-driven safety gate (12 cases:
+  3 methods × 4 shapes) all green on the first attempt.
+- CODA-Prompt is the one remaining piece of the P5 prompt trio: same
+  prefix-KV injection point as DualPrompt, but a *soft* attention-weighted
+  combination of every pool component (no top-k) plus Gram-Schmidt
+  orthogonalization of new pool slots per task — the next continuation of
+  this phase.

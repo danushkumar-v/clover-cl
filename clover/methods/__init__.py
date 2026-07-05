@@ -1,7 +1,7 @@
 """Method plugins: CLMethod implementations (SPEC §6).
 
-``simplecil`` (P3) and ``l2p`` (P5) are registered; DualPrompt and
-CODA-Prompt are the rest of the P5 prompt trio, queued next. The adapter
+``simplecil`` (P3), ``l2p`` and ``dualprompt`` (P5) are registered;
+CODA-Prompt is the rest of the P5 prompt trio, queued next. The adapter
 family (APER-Adapter, EASE, RanPAC, MOS, TUNA) lands in P6.
 """
 
@@ -19,6 +19,6 @@ __all__ = ["register_method", "get_method", "list_methods"]
 
 # Imported for registration side effects only; must come after the
 # register_method binding above, since these modules import it back.
-from clover.methods import l2p, simple_cil  # noqa: E402
+from clover.methods import dual_prompt, l2p, simple_cil  # noqa: E402
 
-__all__ += ["simple_cil", "l2p"]
+__all__ += ["simple_cil", "l2p", "dual_prompt"]
