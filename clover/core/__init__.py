@@ -1,13 +1,6 @@
-from clover.core.data_manager import OverlapDataManager
-from clover.core.image_assigner import assign_images
-from clover.core.overlap_spec import ImageSplit, OverlapPair, OverlapSpec
-from clover.core.task_builder import build_tasks
+"""Stream model: specs, planning, assignment, experiences (SPEC §3-§5).
 
-__all__ = [
-    "OverlapSpec",
-    "OverlapPair",
-    "ImageSplit",
-    "OverlapDataManager",
-    "build_tasks",
-    "assign_images",
-]
+Pure functions and dataclasses only — no I/O or global state. Bodies land in
+P1 (spec/plan/planner/assignment/experience/stream) and P2 (LabelSpaceView on
+Experience).
+"""

@@ -1,1 +1,0 @@
-"""CLOVER command-line interface."""

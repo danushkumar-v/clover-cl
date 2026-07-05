@@ -1,0 +1,57 @@
+"""P0 gate: the v2 skeleton imports cleanly and registries behave correctly."""
+
+from __future__ import annotations
+
+import pytest
+
+import clover
+from clover.backbones import get_backbone, list_backbones, register_backbone
+from clover.datasets import get_dataset, list_datasets, register_dataset
+from clover.methods import get_method, list_methods, register_method
+from clover.scenarios import get_scenario, list_scenarios, register_scenario
+from clover.utils.registry import Registry
+
+
+def test_package_imports() -> None:
+    assert clover.__version__ == "2.0.0.dev0"
+
+
+@pytest.mark.parametrize(
+    "list_fn",
+    [list_datasets, list_scenarios, list_methods, list_backbones],
+)
+def test_registries_start_empty(list_fn) -> None:
+    assert list_fn() == []
+
+
+@pytest.mark.parametrize(
+    ("register_fn", "get_fn"),
+    [
+        (register_dataset, get_dataset),
+        (register_scenario, get_scenario),
+        (register_method, get_method),
+        (register_backbone, get_backbone),
+    ],
+)
+def test_registry_round_trip(register_fn, get_fn) -> None:
+    @register_fn("dummy")
+    class Dummy:
+        pass
+
+    assert get_fn("dummy") is Dummy
+
+
+def test_registry_unknown_name_is_actionable() -> None:
+    registry: Registry = Registry("widget")
+    registry.register("gizmo")(object())
+
+    with pytest.raises(KeyError, match="unknown widget 'gizmo2'.*did you mean 'gizmo'"):
+        registry.get("gizmo2")
+
+
+def test_registry_duplicate_name_rejected() -> None:
+    registry: Registry = Registry("widget")
+    registry.register("gizmo")(object())
+
+    with pytest.raises(ValueError, match="widget 'gizmo' is already registered"):
+        registry.register("gizmo")(object())
