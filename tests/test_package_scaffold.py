@@ -16,8 +16,8 @@ def test_package_imports() -> None:
     assert clover.__version__ == "2.0.0.dev0"
 
 
-def test_methods_registry_is_still_empty_until_p3() -> None:
-    assert list_methods() == []
+def test_methods_registry_has_simplecil_since_p3() -> None:
+    assert set(list_methods()) == {"simplecil"}
 
 
 def test_scenario_registry_has_the_6_core_scenarios_since_p1() -> None:

@@ -1,8 +1,7 @@
 """Method plugins: CLMethod implementations (SPEC §6).
 
-This module only wires up the registry. ``base.py`` (CLMethod ABC),
-``heads.py``, and ``losses.py`` are filled in starting P2/P3; concrete
-methods (SimpleCIL, L2P, ...) register against this registry from P3 on.
+``simplecil`` (P3, SPEC §6.5) is the first registered method; the prompt/
+adapter families land in P5/P6.
 """
 
 from __future__ import annotations
@@ -16,3 +15,9 @@ get_method = _registry.get
 list_methods = _registry.list
 
 __all__ = ["register_method", "get_method", "list_methods"]
+
+# Imported for registration side effects only; must come after the
+# register_method binding above, since the module imports it back.
+from clover.methods import simple_cil  # noqa: E402
+
+__all__ += ["simple_cil"]
