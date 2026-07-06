@@ -18,7 +18,7 @@ locally: the registry-driven revisit-safety gate (all 6 core scenarios) and
 | APER-Adapter | done (P6) | one-shot adapter, dual-branch concat | cosine prototype |
 | RanPAC | done (P6) | one-shot adapter, frozen after | random-projection ridge regression |
 | EASE | done (P6) | growing per-task adapter list | growing-dim cosine + reweight |
-| MOS | queued (P6) | EMA-merged per-task adapter | cosine prototype + CA |
+| MOS | done (P6) | EMA-merged, one continuously-trained adapter | cosine prototype + CA |
 | TUNA | queued (P6) | EMR-merged per-task adapter | per-task linear (concat) + CA |
 
 ## Adapter family (P6)
@@ -117,6 +117,63 @@ Hyperparameters (bench provenance: `bench/configs/methods/ease.yaml`):
 | `beta` (init-PTM block weight) | 0 | not exposed | `use_init_ptm=false` upstream default -- not reimplemented |
 | `use_diagonal` | false | not exposed | vestigial ablation flag upstream |
 | adapter-tuning epochs/lr | init_epochs=20, init_lr=0.025 | 40 / 3e-2 (safety-gate default) | tuned for the tiny random backbone |
+
+### MOS
+
+Unlike EASE (a fresh adapter per experience) or APER-Adapter/RanPAC (one
+adapter, trained once), MOS (`clover/backbones/adapter_mos.py:
+MOSAdapterViT`) keeps a **single adapter training continuously across the
+whole run** -- this is the "Mixture-of-Subspace" name. After every
+optimizer step, `merge_step()` EMA-blends the current adapter's parameters
+toward the running mean of all earlier experiences' frozen snapshots
+(`momentum`), regularizing it against drifting too far from its own
+history. `snapshot()` (freeze a copy into `adapter_list`, fold it into the
+running sum) is called from `MOS.before_experience` for the same
+resume-safety reason as EASE's `grow()` (see "Judgment calls").
+
+The head is a **fixed-width** `IncrementalHead(cosine=True)` (unlike
+EASE's growing dim) -- shared across every adapter era. New classes get
+prototype rows set directly (like SimpleCIL/APER-Adapter); the main
+training loop also gradient-trains the head jointly with the adapter via
+`new_class_ce`, but those values only matter for the *new* classes'
+convergence, since `set_prototype` overwrites their rows afterward anyway
+(mirrors PILOT's own `replace_fc` following its gradient-trained
+`_init_train` pass).
+
+At evaluation time, the classifier ensembles every stored adapter's
+prediction (`clover/methods/mos.py:_Classifier`): each adapter's features
+pass through the *same* shared head, and the resulting logits are
+averaged. **Simplified out**: PILOT's entropy-based test-time
+self-refinement search (iteratively re-predicting with whichever adapter
+gave the lowest-entropy output) -- a plain average captures "combine
+multiple adapters' predictions" without the iterative search, and this was
+agreed as a scope simplification before implementing (the EMA merge
+itself, MOS's actual headline mechanism, is implemented in full).
+
+**Classifier alignment (CA)**: new shared
+`clover/methods/classifier_alignment.py` (`update_class_stats`,
+`gaussian_resample_finetune`) -- stores each class's `(mean, covariance)`
+(damped by `1e-4 * I`, matching PILOT's own damping) from real features
+once, computed via the *current* adapter; after every experience past the
+first, the head is fine-tuned via cross-entropy on synthetic features
+resampled from `N(mean, cov)` for every class seen so far (old and new),
+via an explicit `torch.Generator` (Cholesky + `randn`, not
+`torch.distributions.MultivariateNormal.sample()`, which doesn't accept
+one) seeded from `exp.task_label` -- not the global RNG, since this runs
+inside `train_experience`, which resume-replay skips for already-completed
+experiences. Reused as-is by TUNA.
+
+Hyperparameters (bench provenance: `bench/configs/methods/mos.yaml`):
+
+| Key | PILOT value | CLOVER default | Note |
+|---|---|---|---|
+| `bottleneck_dim` (PILOT: `ffn_num`) | 16 (not 64 like the other adapter methods) | 8 | scaled down proportionally |
+| `momentum` (PILOT: `adapter_momentum`) | 0.1 | 0.1 | unchanged |
+| `crct_epochs` | 30 | 10 (constructor default) | reduced for the tiny synthetic setup; not yet config-driven (see below) |
+| `ca_lr` | 0.005 | 5e-3 | unchanged |
+| `reg` (orthogonality regularizer weight, always-applied in PILOT -- unlike TUNA's optional `use_orth`) | 0.1 | not exposed | not reimplemented -- a secondary regularizer layered on the main loss, not MOS's headline mechanism (the EMA merge) |
+| two-param-group LR split (adapter vs. head at 10x lower LR) | present | not reimplemented | single shared LR for adapter+head; a scope simplification, not yet revisited |
+| `ensemble`/entropy self-refinement | true / present | plain logit average | see "Simplified out" above |
 
 ## Judgment calls / scope simplifications (P6)
 

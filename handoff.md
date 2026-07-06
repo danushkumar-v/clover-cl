@@ -8,12 +8,12 @@ section for the next phase.
 
 - Repo: `D:\Dev\Research\clover-cl`. Work branch: `v2`.
 - `v2` was pushed to `origin/v2` (`b444ec2`) through P5. **This session's
-  P6 work (APER-Adapter + RanPAC + EASE) is committed locally but not yet
-  pushed** — push only if the user asks.
+  P6 work (APER-Adapter + RanPAC + EASE + MOS) is committed locally but not
+  yet pushed** — push only if the user asks.
 - `main` is untouched at `a01eaf7` (v1, preserved as-is until the P9 release
   per SPEC.md — do not merge or push to `main` before then).
 - `PLAN.md`: **P0-P5 done and ticked. P6 is in progress (not ticked) —
-  APER-Adapter, RanPAC, and EASE are done; MOS, TUNA are queued.**
+  APER-Adapter, RanPAC, EASE, and MOS are done; only TUNA is queued.**
 - Local `.venv` (Python 3.11) has everything installed (`pip install -e
   ".[dev]"` already run) — torch/torchvision/timm/pyyaml/pillow +
   pytest/ruff/mypy/types-PyYAML.
@@ -61,11 +61,11 @@ section for the next phase.
   DualPrompt (prefix-KV general+expert prompts), CODA-Prompt (prefix-KV,
   soft attention-weighted pool + Gram-Schmidt orthogonalization). All three
   share `methods/prompt_common.py:PromptMethodBase`.
-- **P6 (in progress) — APER-Adapter + RanPAC + EASE done**: new adapter
-  hook (`adapter: Optional[Dict[int, nn.Module]]`, parallel branch off the
-  pre-MLP residual stream) threaded through `TransformerBlock`/`TinyViT`
-  alongside `prefix_kv`; `clover/backbones/adapter.py` (`Adapter` +
-  `AdapterViT`/`vit_adapter`); `clover/methods/adapter_common.py:
+- **P6 (in progress) — APER-Adapter + RanPAC + EASE + MOS done**: new
+  adapter hook (`adapter: Optional[Dict[int, nn.Module]]`, parallel branch
+  off the pre-MLP residual stream) threaded through `TransformerBlock`/
+  `TinyViT` alongside `prefix_kv`; `clover/backbones/adapter.py` (`Adapter`
+  + `AdapterViT`/`vit_adapter`); `clover/methods/adapter_common.py:
   AdapterMethodBase` (shared "train adapter once at `exp.task_label == 0`,
   freeze forever, closed-form head every experience after" lifecycle);
   APER-Adapter (dual-branch cosine-prototype concat, reusing one frozen
@@ -77,15 +77,19 @@ section for the next phase.
   -experience adapter list, only the most recent set trainable;
   `clover/methods/heads.py:EaseHead` — growing-dim cosine head with
   per-class "home block" + `alpha`-scaled cross-block reweighting;
-  `clover/methods/ease.py`). MOS, TUNA are next — see PLAN.md's P6 Log
-  entry and "Next up" below for the full per-method design already agreed
-  with the user.
+  `clover/methods/ease.py`). MOS (`clover/backbones/adapter_mos.py:
+  MOSAdapterViT` — one continuously-trained adapter, EMA-blended after
+  every optimizer step toward the mean of its own frozen history;
+  `clover/methods/classifier_alignment.py` — new shared Gaussian-resample
+  classifier alignment, reused by TUNA; `clover/methods/mos.py`). TUNA is
+  the last method in this phase — see PLAN.md's P6 Log entries and "Next
+  up" below for the full design already agreed with the user.
 
-Current test suite: **293 tests**, full `pytest tests/ -v` run takes
-**~5-6 minutes** — the registry-driven safety gate
-(`tests/test_method_registry_safety_gate.py`) is the expensive part (42
-cases: 7 methods × 6 scenarios, each a real short training run). Budget for
-this when working — don't assume the suite is fast. All three new P6
+Current test suite: **315 tests**, full `pytest tests/ -v` run takes
+**~7-8 minutes** — the registry-driven safety gate
+(`tests/test_method_registry_safety_gate.py`) is the expensive part (48
+cases: 8 methods × 6 scenarios, each a real short training run). Budget for
+this when working — don't assume the suite is fast. All four new P6
 methods passed the gate at the *existing* tuned hyperparameters
 (`epochs=40, optimizer_lr=3e-2`) with no retuning needed.
 
@@ -109,17 +113,27 @@ methods passed the gate at the *existing* tuned hyperparameters
   before the experience loop starts, so dropout would be permanently
   disabled framework-wide regardless of method — dead code, not a
   meaningful omission.
-- **MOS's iterative entropy-based test-time adapter self-refinement** and
-  **TUNA's per-sample entropy-based adapter routing** are planned scope
-  simplifications for when those two land (not yet implemented) — both are
+- **MOS's iterative entropy-based test-time adapter self-refinement is
+  done** (replaced with a plain logit average over every stored adapter);
+  **TUNA's per-sample entropy-based adapter routing** is the same planned
+  simplification for when TUNA lands (not yet implemented) — both are
   secondary inference-time tricks layered on top of each method's actual
-  headline mechanism (MOS's continuous EMA merge; TUNA's EMR merge), which
-  *will* be implemented in full. Agreed with the user in this session's
-  plan-mode approval before any EASE/MOS/TUNA code was written.
+  headline mechanism (MOS's continuous EMA merge, implemented in full;
+  TUNA's EMR merge, to be implemented in full). Agreed with the user in
+  this session's plan-mode approval before any EASE/MOS/TUNA code was
+  written.
 - **EASE's `beta`/`use_init_ptm` (init-PTM block in the reweighting) and
   `use_diagonal`/`moni_adam` (vestigial ablation flags upstream) are not
   reimplemented** — upstream defaults them off/unused anyway; see
   `docs/methods.md`'s EASE hyperparameter table.
+- **MOS's always-on orthogonality regularizer (`reg`-weighted `orth_loss`)
+  and two-param-group optimizer (adapter LR vs. head at 10x lower LR) are
+  not reimplemented** — discovered while implementing, not previously
+  flagged in the original plan. `orth_loss` is a secondary regularizer on
+  top of MOS's actual headline mechanism (the EMA merge); the per-param
+  -group LR split isn't expressible through `TrainContext`'s single-LR
+  `optimizer_factory` without a broader Trainer change no method has
+  needed yet. See `docs/methods.md`'s MOS hyperparameter table.
 
 ## Judgment calls worth knowing about (so P6 doesn't re-litigate them)
 
@@ -147,10 +161,12 @@ methods passed the gate at the *existing* tuned hyperparameters
   `PromptMethodBase`'s "trainable prompt + gradient-trained head every
   experience" shape). New base: `clover/methods/adapter_common.py:
   AdapterMethodBase`, used only by APER-Adapter/RanPAC. **Confirmed while
-  building EASE: it doesn't fit this base either** (EASE trains every
-  experience, not just the first) — EASE is a standalone `CLMethod`, and
-  MOS/TUNA will each need their own module too, not a shared base, since
-  their per-task-list/merge bookkeeping differs enough from each other too.
+  building EASE and MOS: neither fits this base either** (both train every
+  experience, not just the first, and have mutually-incompatible per
+  -experience bookkeeping — EASE's adapter list vs. MOS's single
+  continuously-trained adapter) — each is its own standalone `CLMethod`.
+  Only `classifier_alignment.py` (Gaussian-resample CA) is shared between
+  MOS and the still-queued TUNA.
 - **Any per-experience structural growth that must be reflected before
   `load_state_dict` runs belongs in `before_experience`, never
   `train_experience`/`after_experience`** — the Trainer's resume-replay
@@ -159,10 +175,23 @@ methods passed the gate at the *existing* tuned hyperparameters
   `expand_classes` all live in `EASE.before_experience` for exactly this
   reason (see PLAN.md's P6-continued log entry for the full reasoning,
   including why putting `grow()` in `after_experience` would silently drop
-  the *final* experience's adapter even on a live, non-resumed run). MOS/
-  TUNA will hit the same constraint for their own per-experience adapter
-  bookkeeping — plan for it up front rather than discovering it via a
-  resume-test failure.
+  the *final* experience's adapter even on a live, non-resumed run). MOS's
+  `MOSAdapterViT.snapshot()` follows the same pattern (from
+  `MOS.before_experience`, for `exp.task_label >= 1`). TUNA will hit the
+  same constraint for its own per-experience adapter bookkeeping — plan
+  for it up front rather than discovering it via a resume-test failure.
+- **`torch.distributions.MultivariateNormal.sample()` draws from the
+  global RNG and doesn't accept an explicit generator** — discovered while
+  designing MOS's classifier alignment (caught before it became a bug, not
+  an actual regression found in testing). Since CA runs inside
+  `train_experience` (which resume-replay skips for completed
+  experiences), sampling from the global RNG there would desynchronize a
+  resumed run's later RNG state from an uninterrupted run's — the same
+  class of bug P3's DataLoader-RNG fix addressed.
+  `classifier_alignment.py` implements Gaussian sampling by hand
+  (Cholesky decomposition + `torch.randn(..., generator=...)`) instead,
+  seeded from `exp.task_label` (same locally-seeded pattern as RanPAC's
+  ridge-selection split). Keep this in mind for TUNA's own CA call.
 - **mypy's `clover/core clover/config` gate transitively pulls in whatever
   those modules import** — `clover/config` imports from `clover/training`,
   which imports `clover/methods`, which imports every registered method
@@ -202,24 +231,12 @@ methods passed the gate at the *existing* tuned hyperparameters
   check. Keep any future closed-form-solved head weight as a Parameter for
   the same reason.
 
-## Next up: P6 continued — MOS, TUNA (SPEC §6.5)
+## Next up: P6 continued — TUNA, the last method (SPEC §6.5)
 
-APER-Adapter, RanPAC, and EASE are done. Full per-method design was agreed
-with the user via plan-mode approval before this phase's code was written —
-the design still holds for the last 2:
+APER-Adapter, RanPAC, EASE, and MOS are all done. Full per-method design was
+agreed with the user via plan-mode approval before this phase's code was
+written — the design still holds for the last one:
 
-- **MOS** (`clover/backbones/adapter_mos.py` + `clover/methods/mos.py`):
-  per-experience adapter gradient-trained with `new_class_ce`, continuously
-  EMA-blended toward the running mean of previous experiences' adapters
-  during training (`adapter_momentum`) — implement this merge in full, it's
-  MOS's headline mechanism. Fixed-width `IncrementalHead(cosine=True)`
-  (unlike EASE, no growing dim). New shared
-  `clover/methods/classifier_alignment.py` (`gaussian_resample_finetune`):
-  per-class mean/covariance, synthetic-feature CE fine-tuning for
-  `crct_epochs` after each experience past the first — reused by TUNA.
-  **Simplify out**: the iterative entropy-based test-time adapter
-  self-refinement search (secondary inference trick, not the merge itself)
-  — replace with a plain average over all adapters' predictions.
 - **TUNA** (`clover/backbones/adapter_tuna.py` + `clover/methods/tuna.py`):
   per-experience adapter trained with a small CosFace/angular-margin loss
   (new `angular_margin_ce` helper in `clover/methods/losses.py`, still
@@ -228,14 +245,25 @@ the design still holds for the last 2:
   adapters — implement in full, it's TUNA's defining mechanism and a
   compact closed-form op, not an iterative search. Per-task `nn.Linear`
   heads (no bias, cosine input) concatenated, unfrozen. Reuses
-  `classifier_alignment.py`. **Simplify out**: per-sample entropy-based
-  adapter routing at test time — use the EMR-merged adapter directly.
+  `clover/methods/classifier_alignment.py` (built for MOS, same
+  Gaussian-resample CA applies) — remember its sampling needs an explicit
+  generator, not `torch.distributions`, per the RNG note above.
+  **Simplify out**: per-sample entropy-based adapter routing at test time
+  — use the EMR-merged adapter directly (this is *more* faithful to
+  "TUNA" than skipping the merge would be, and simpler than reimplementing
+  per-sample routing). Watch for the same `before_experience`-vs-
+  `train_experience` structural-growth timing EASE/MOS both needed for
+  resume-safety (per-task adapter list growth, whatever TUNA's own
+  bookkeeping needs).
+
+Once TUNA lands: tick P6's checkbox in `PLAN.md`, and `docs/methods.md`'s
+comparison table will cover all 9 methods.
 
 DONE (whole phase, all 5 methods): each passes the safety gate + smoke + a
 disjoint CIFAR-100 sanity run vs. published range (CIFAR-100 leg deferred,
 same pattern as P3/P4/P5 — implement and verify everything locally
 checkable, log the cluster-dependent piece as deferred); comparison table
-in `docs/methods.md` covers all 9 methods (currently 7 of 9 rows filled in).
+in `docs/methods.md` covers all 9 methods (currently 8 of 9 rows filled in).
 
 Read-only research on the exact PILOT mechanism (files, line numbers,
 hyperparameters, known bugs) for all 5 adapter-family methods was already
@@ -247,7 +275,7 @@ scratch.
 
 ```
 cd D:\Dev\Research\clover-cl
-.venv/Scripts/python.exe -m pytest tests/ -v                     # full suite, ~5-6 min
+.venv/Scripts/python.exe -m pytest tests/ -v                     # full suite, ~7-8 min
 .venv/Scripts/python.exe -m ruff check clover tests
 .venv/Scripts/python.exe -m mypy clover/core clover/config
 .venv/Scripts/python.exe -m clover.cli smoke                     # all registered methods

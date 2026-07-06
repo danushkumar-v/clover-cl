@@ -22,6 +22,7 @@ __all__ = ["register_backbone", "get_backbone", "list_backbones"]
 from clover.backbones import (  # noqa: E402
     adapter,
     adapter_ease,
+    adapter_mos,
     coda_prompt,
     dual_prompt,
     prompt_pool,
@@ -37,4 +38,5 @@ __all__ += [
     "coda_prompt",
     "adapter",
     "adapter_ease",
+    "adapter_mos",
 ]

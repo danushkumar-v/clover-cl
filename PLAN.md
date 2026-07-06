@@ -479,3 +479,67 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   (new shared `clover/methods/classifier_alignment.py`, reused by TUNA).
   See handoff.md for the full per-method design (MOS/TUNA) agreed in the
   original P6 planning session.
+
+- **2026-07-06, P6 continued (still in progress, not ticked): MOS done.**
+  `clover/backbones/adapter_mos.py:MOSAdapterViT` keeps ONE adapter
+  training continuously across the whole run (unlike EASE's fresh adapter
+  per experience) -- `merge_step()` EMA-blends it toward the running mean
+  of all earlier experiences' frozen snapshots after every optimizer step
+  (`momentum`), and `snapshot()` (freeze + fold into the running sum) is
+  called from `before_experience` for the same resume-safety reason as
+  EASE's `grow()`. New shared `clover/methods/classifier_alignment.py`
+  (`update_class_stats`/`gaussian_resample_finetune`) reused as-is by
+  TUNA. Registry-driven safety gate (all 6 scenarios) and `clover smoke`
+  both green at the *existing* tuned hyperparameters, no retuning needed.
+- **The running-sum accumulator (`_adapter_sum`) is a second,
+  never-trained `Adapter`-shaped `nn.ModuleList`** (zeroed at construction,
+  `requires_grad_(False)`), not a set of raw buffers -- reuses `Adapter`'s
+  existing parameter shapes directly instead of hand-deriving matching
+  buffer shapes per layer, and round-trips through `state_dict()`/
+  `load_state_dict()` automatically since it's a real submodule. `len(
+  adapter_list)` (not a separate serialized counter) is what `merge_step`
+  divides by to get the running mean -- correct after resume because
+  `adapter_list`'s length is itself reconstructed via the same
+  before_experience-replay mechanism.
+- **Classifier alignment's synthetic sampling required a second
+  never-let-per-experience-randomness-touch-the-global-RNG fix**: found
+  while designing this (not yet an actual bug, caught before implementing)
+  -- `torch.distributions.MultivariateNormal.sample()` draws from the
+  global RNG and doesn't accept an explicit generator, so
+  `classifier_alignment.py` implements sampling by hand (Cholesky
+  decomposition + `torch.randn(..., generator=...)`) seeded from
+  `exp.task_label`, mirroring RanPAC's ridge-selection-split fix from
+  earlier this phase. Same underlying class of bug P3's DataLoader-RNG fix
+  addressed: CA runs inside `train_experience`, which resume-replay skips
+  for already-completed experiences, so drawing from the global RNG there
+  would desynchronize a resumed run's later RNG-dependent steps from an
+  uninterrupted run's.
+- **Per-class `(mean, covariance)` stats are computed via the *current*
+  adapter's features**, kept verbatim (stale) for classes not seen in a
+  given experience (their images are gone, matching the same
+  no-exemplar-memory constraint EASE's cross-block interpolation is under)
+  -- overwritten only when that class reappears. Damped by `1e-4 * I`
+  (matches PILOT's own damping) for numerical stability in
+  `torch.linalg.cholesky`.
+- **Simplified out** (agreed before implementing, per handoff.md's P6
+  plan): PILOT's entropy-based test-time adapter self-refinement search --
+  the classifier instead ensembles by averaging logits from every stored
+  adapter (history + current) through the same shared head. **Also
+  simplified, discovered while implementing** (not previously flagged):
+  PILOT's always-on orthogonality regularizer (`reg`-weighted `orth_loss`
+  term in the main training loss) and its two-param-group optimizer (base
+  adapter LR vs. head at 10x lower LR) are not reimplemented -- the
+  orth_loss is a secondary regularizer layered on top of MOS's actual
+  headline mechanism (the EMA merge, implemented in full), and the
+  per-param-group LR split isn't expressible through this framework's
+  single-LR `TrainContext.optimizer_factory` without a broader Trainer
+  change no other method has needed yet. Recorded in `docs/methods.md`'s
+  MOS hyperparameter table.
+- Next: TUNA (`clover/backbones/adapter_tuna.py` + `clover/methods/
+  tuna.py`) -- the last method in P6. Per-experience adapter trained with
+  a CosFace/angular-margin loss, then EMR-merge (sign-consensus,
+  max-magnitude-among-agreeing-signs, rescaled) across all stored per-task
+  adapters; per-task `nn.Linear` heads (no bias, cosine input)
+  concatenated, unfrozen; reuses `classifier_alignment.py`. Once TUNA
+  lands: tick P6's box, and update `docs/methods.md`'s comparison table to
+  mark all 9 methods done.
