@@ -41,8 +41,16 @@ def test_scenario_registry_has_the_6_core_scenarios_since_p1() -> None:
     }
 
 
-def test_dataset_registry_has_the_synthetic_builtin_since_p2() -> None:
-    assert set(list_datasets()) == {"synthetic"}
+def test_dataset_registry_has_the_expected_p2_p8_builtins() -> None:
+    assert set(list_datasets()) == {
+        "synthetic",
+        "cifar100",
+        "cub200",
+        "imagenet_r",
+        "imagenet_a",
+        "omnibenchmark",
+        "vtab",
+    }
 
 
 def test_backbone_registry_has_the_expected_p2_p6_builtins() -> None:

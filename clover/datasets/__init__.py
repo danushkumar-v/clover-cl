@@ -1,8 +1,7 @@
 """Dataset plugins: CLDataset ABC (SPEC §7).
 
-``synthetic`` (P2, SPEC §12.2) is the only built-in for now; the real
-datasets (CIFAR-100, CUB-200, ImageNet-R/A, OmniBenchmark, VTAB) land in
-P7/P8 on top of the same ``CLDataset`` ABC.
+``synthetic`` (P2, SPEC §12.2) plus the 6 real built-ins (P8): CIFAR-100,
+CUB-200, ImageNet-R/A, OmniBenchmark, VTAB.
 """
 
 from __future__ import annotations
@@ -18,7 +17,15 @@ list_datasets = _registry.list
 __all__ = ["register_dataset", "get_dataset", "list_datasets"]
 
 # Imported for registration side effects only; must come after the
-# register_dataset binding above, since the module imports it back.
-from clover.datasets import synthetic  # noqa: E402
+# register_dataset binding above, since these modules import it back.
+from clover.datasets import (  # noqa: E402
+    cifar100,
+    cub200,
+    imagenet_a,
+    imagenet_r,
+    omnibench,
+    synthetic,
+    vtab,
+)
 
-__all__ += ["synthetic"]
+__all__ += ["synthetic", "cifar100", "cub200", "imagenet_r", "imagenet_a", "omnibench", "vtab"]

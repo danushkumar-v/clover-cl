@@ -45,3 +45,9 @@ warn_redundant_casts = true
 module = ["clover.core.*", "clover.config.*"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+# torchvision ships no type stubs / py.typed marker (P8: real dataset
+# wrappers). Not a code-quality gap -- there's nothing to fix on our side.
+module = ["torchvision.*"]
+ignore_missing_imports = true

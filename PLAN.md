@@ -747,3 +747,77 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   report`, `run-matrix`) ticked together in this entry since the last two
   landed in the same session as this log entry. Next unchecked phase:
   P8 — Datasets + extras + docs (SPEC §7, §8, §13).
+
+- **2026-07-06, P8 (in progress, not ticked): the 6 built-in datasets
+  done; `image_folder` config-only dataset, scenario extras, docs still
+  queued.** Unlike P5-P7 (researched against `clover-pilot-bench`, a
+  third party), this phase's best reference turned out to be this same
+  repo's own `v1`/`main` branch — read directly via `git show main:...`
+  (no checkout): it already has clean, working implementations of exactly
+  the 6 datasets and 4 scenario extras this phase needs. SPEC itself says
+  `CLDataset` ABC "≈ v1" — porting/adapting v1's own dataset code is
+  explicitly sanctioned here in a way reusing PILOT's code never was;
+  this is evolving the same project's prior version, not a third-party
+  -code question.
+- `clover/datasets/cifar100.py`: direct port of v1's `torchvision
+  .datasets.CIFAR100(root, download=True)`-backed wrapper — torchvision
+  owns the actual download/checksum/extraction. `clover/datasets/
+  image_folder_base.py:ImageFolderCLDataset`: **v1 duplicated the exact
+  same `ImageFolder`-backed wrapper 5×** (CUB-200, ImageNet-R, ImageNet-A,
+  OmniBenchmark, VTAB — confirmed via direct comparison: identical
+  `ImageFolder` load, identical `FileNotFoundError` staging message
+  shape, identical train/test transform pipelines, identical
+  `class_to_indices` construction, differing only in `dataset_dir`/
+  `num_classes`/download URL) — extracted into one shared base instead.
+  Unlike P6's adapter-family lesson ("don't assume a shared base before
+  building two things that need it"), this is the *opposite* situation:
+  five already-built, confirmed-identical examples existed before any
+  base class was written, so extracting one here is not premature.
+- **No real dataset downloads or network access used anywhere this
+  session** — matches how v1's own test suite avoided this: CIFAR-100
+  tests monkeypatch `torchvision.datasets.CIFAR100` with a synthetic
+  100-class stand-in (`tests/conftest.py:patched_cifar100`, ported
+  directly from v1's `conftest.py`); the 5 `ImageFolder`-based ones are
+  tested via (a) the `FileNotFoundError` staging-error path and (b) a
+  real, tiny hand-built `ImageFolder`-shaped fixture directory (`PIL`
+  -generated tiny PNGs via `tempfile`/`tmp_path`) exercising the actual
+  loading path end-to-end — going one step further than v1's own tests,
+  which only ever checked the error path for these five.
+- **Download URLs carried forward from v1's own docstrings/constants**
+  (Google Drive links the user had already vetted for their prior v1
+  work) — not fetched, not newly sourced; purely documentation pointers
+  in `FileNotFoundError` messages and module docstrings, exactly as v1
+  itself used them.
+- **Real, unrelated mypy gap found and fixed**: adding any dataset that
+  imports `torchvision` (all 6 new ones) surfaced `import-untyped` for
+  `torchvision.*` in the `mypy clover/core clover/config` gate --
+  `clover/config/loader.py` imports `from clover.datasets import
+  get_dataset`, so `clover/datasets/__init__.py`'s new imports are pulled
+  in transitively (the exact "mypy transitively pulls in whatever those
+  modules import" lesson from P6, now hitting a *third-party stub gap*
+  rather than an internal type error). Fixed with a
+  `[[tool.mypy.overrides]] module = ["torchvision.*"] ignore_missing_imports
+  = true` block in `pyproject.toml` — torchvision ships no `py.typed`
+  marker, so there was nothing to fix on our own code's side.
+- ImageNet-A's docstring notes explicitly (matching v1's own comment)
+  that it has no official train/test split — staging requires manually
+  creating one, unlike the other 4 which have official splits.
+- Full suite: 408 tests (23 new: 6 dataset-registration/CIFAR-100
+  fixtures + 15 parametrized `ImageFolder` cases + 2 registry-scaffold
+  fixes). `clover smoke` unaffected (9/9 methods still green, this phase
+  doesn't touch the method/training path at all).
+- Next: `image_folder` config-only dataset (SPEC §7) -- needs
+  `StreamSection.dataset` to accept a mapping (`{type: image_folder,
+  root:, num_classes:}`) in addition to a plain string, a real (if small)
+  config-schema extension distinct from "register another class", so it
+  gets its own pass. Then scenario extras: re-derive each of v1's 4
+  extras' *intent* against v2's unified `RevisitSpec` model (confirmed
+  v1's own `build_stream_spec` for all 4 is generic boilerplate --the
+  real per-scenario mechanism lived only in the legacy `OverlapSpec`
+  path P1 already removed) -- expect `distribution_shift` to map cleanly
+  (same-id revisit + new/partial images), `symmetric_pair`
+  approximately (v2 has no bidirectional task-pair concept), and
+  `near_miss`/`hierarchical` to end up documented as out-of-scope-for
+  -v2.0 rather than force-fit (SPEC explicitly permits this: "absence
+  must not block v2.0"). Then `docs/concepts.md`/`docs/extending.md`,
+  once there's more to reference concretely. Once all land: tick P8's box.
