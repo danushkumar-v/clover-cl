@@ -65,3 +65,80 @@ class IncrementalHead(nn.Module):
             assert self.scale is not None
             return self.scale * F.linear(features, weight)
         return F.linear(features, self.weight)
+
+
+class RandomProjectionRidgeHead(nn.Module):
+    """RanPAC's closed-form head (SPEC §6.5): a frozen random Gaussian
+    projection expands frozen backbone features into a wider, nonlinear
+    random feature space (``relu(x @ W_rand)``), and a ridge-regression
+    linear head is solved in closed form from *accumulated sufficient
+    statistics* -- never gradient-trained.
+
+    ``G`` (``[M, M]``, Gram matrix of projected features) and ``Q``
+    (``[M, C]``, feature/one-hot-label correlation) are updated once per
+    experience via ``accumulate``; ``solve`` re-derives ``weight`` from
+    scratch each time (``torch.linalg.solve(G + ridge*I, Q)``) -- this is
+    the accumulate-sufficient-statistics trick PILOT's RanPAC uses, not a
+    literal Sherman-Morrison-Woodbury inverse update. ``M`` (projection
+    width) is scaled down from PILOT's 10000 (a 768-dim pretrained ViT) to
+    fit this project's tiny synthetic-dataset backbones.
+    """
+
+    #: Explicit types for mypy -- ``register_buffer`` alone doesn't give it
+    #: enough to infer these aren't plain ``nn.Module`` attributes.
+    w_rand: torch.Tensor
+    g: torch.Tensor
+    q: torch.Tensor
+
+    def __init__(self, feature_dim: int, projection_dim: int = 256, num_classes: int = 0) -> None:
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.projection_dim = projection_dim
+        self.register_buffer("w_rand", torch.randn(feature_dim, projection_dim))
+        self.register_buffer("g", torch.zeros(projection_dim, projection_dim))
+        self.register_buffer("q", torch.zeros(projection_dim, num_classes))
+        self.weight = nn.Parameter(torch.zeros(num_classes, projection_dim))
+
+    @property
+    def num_classes(self) -> int:
+        return self.weight.shape[0]
+
+    def project(self, features: torch.Tensor) -> torch.Tensor:
+        return F.relu(features @ self.w_rand)
+
+    def expand_to(self, new_num_classes: int) -> None:
+        """Grow ``q``/``weight`` to *new_num_classes* columns/rows, preserving
+        existing ones. No-op if already at least that wide."""
+        if new_num_classes <= self.num_classes:
+            return
+        old_q = self.q
+        new_q = torch.zeros(
+            self.projection_dim, new_num_classes, dtype=old_q.dtype, device=old_q.device
+        )
+        new_q[:, : old_q.shape[1]] = old_q
+        self.q = new_q
+
+        old_weight = self.weight.data
+        new_weight = torch.zeros(
+            new_num_classes, self.projection_dim, dtype=old_weight.dtype, device=old_weight.device
+        )
+        new_weight[: old_weight.shape[0]] = old_weight
+        self.weight = nn.Parameter(new_weight)
+
+    def accumulate(self, features: torch.Tensor, targets: torch.Tensor) -> None:
+        """Fold one batch/experience's features into the running ``G``/``Q``
+        sufficient statistics (no solve yet -- call ``solve`` after)."""
+        phi = self.project(features)
+        y_onehot = F.one_hot(targets, num_classes=self.num_classes).to(phi.dtype)
+        self.g = self.g + phi.t() @ phi
+        self.q = self.q + phi.t() @ y_onehot
+
+    def solve(self, ridge: float) -> None:
+        """Recompute ``weight`` in closed form from the current ``G``/``Q``."""
+        eye = torch.eye(self.projection_dim, dtype=self.g.dtype, device=self.g.device)
+        solved = torch.linalg.solve(self.g + ridge * eye, self.q)  # [M, C]
+        self.weight = nn.Parameter(solved.t().to(self.weight.dtype))
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        phi = self.project(features)
+        return F.linear(phi, self.weight)

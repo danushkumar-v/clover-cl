@@ -19,6 +19,13 @@ __all__ = ["register_backbone", "get_backbone", "list_backbones"]
 
 # Imported for registration side effects only; must come after the
 # register_backbone binding above, since these modules import it back.
-from clover.backbones import coda_prompt, dual_prompt, prompt_pool, tiny_mlp, vit  # noqa: E402
+from clover.backbones import (  # noqa: E402
+    adapter,
+    coda_prompt,
+    dual_prompt,
+    prompt_pool,
+    tiny_mlp,
+    vit,
+)
 
-__all__ += ["tiny_mlp", "vit", "prompt_pool", "dual_prompt", "coda_prompt"]
+__all__ += ["tiny_mlp", "vit", "prompt_pool", "dual_prompt", "coda_prompt", "adapter"]

@@ -1,10 +1,17 @@
 """Clean-room minimal ViT (SPEC §6.4), sized for the synthetic dataset.
 
 Each block's attention accepts an optional ``prefix_kv`` -- prepended to
-K/V before the softmax. L2P (P5, this phase) doesn't use it; DualPrompt and
-CODA-Prompt (queued, same phase) inject their prefix prompts through
-exactly this hook, so it's built now while this class is being written
-from scratch rather than retrofitted later.
+K/V before the softmax. L2P (P5) doesn't use it; DualPrompt and CODA-Prompt
+inject their prefix prompts through exactly this hook.
+
+Each block also accepts an optional ``adapter`` module (P6, SPEC §6.5's
+adapter family: APER-Adapter/EASE/RanPAC/MOS/TUNA) -- a parallel branch
+reading the pre-MLP residual stream, added alongside the MLP's own output.
+Distinct hook from ``prefix_kv``: adapters never touch attention K/V, only
+the residual stream around the MLP (confirmed via read-only research on
+LAMDA-PILOT's ``vit_adapter.py``/``vit_ease.py``/``vit_mos.py``/
+``vit_tuna.py`` -- all splice identically here, never wrapping ``fc1``/
+``fc2`` directly).
 """
 
 from __future__ import annotations
@@ -30,7 +37,9 @@ class Attention(nn.Module):
         self.qkv = nn.Linear(embed_dim, embed_dim * 3)
         self.proj = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, x: torch.Tensor, prefix_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, prefix_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+    ) -> torch.Tensor:
         b, n, c = x.shape
         qkv = self.qkv(x).reshape(b, n, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]  # each [B, heads, N, head_dim]
@@ -57,9 +66,19 @@ class TransformerBlock(nn.Module):
             nn.Linear(embed_dim, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, embed_dim)
         )
 
-    def forward(self, x: torch.Tensor, prefix_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        prefix_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        adapter: Optional[nn.Module] = None,
+    ) -> torch.Tensor:
         x = x + self.attn(self.norm1(x), prefix_kv=prefix_kv)
-        x = x + self.mlp(self.norm2(x))
+        mlp_out = self.mlp(self.norm2(x))
+        if adapter is not None:
+            # Parallel branch off the pre-MLP residual stream `x`, added
+            # alongside the MLP's own output -- never wrapping fc1/fc2.
+            mlp_out = mlp_out + adapter(x)
+        x = x + mlp_out
         return x
 
 
@@ -110,11 +129,15 @@ class TinyViT(nn.Module):
             return self.patch_tokens(x).mean(dim=1)
 
     def forward_tokens(
-        self, tokens: torch.Tensor, prefix_kv: Optional[Dict[int, Tuple[torch.Tensor, torch.Tensor]]] = None
+        self,
+        tokens: torch.Tensor,
+        prefix_kv: Optional[Dict[int, Tuple[torch.Tensor, torch.Tensor]]] = None,
+        adapter: Optional[Dict[int, nn.Module]] = None,
     ) -> torch.Tensor:
         for i, block in enumerate(self.blocks):
             block_prefix = None if prefix_kv is None else prefix_kv.get(i)
-            tokens = block(tokens, prefix_kv=block_prefix)
+            block_adapter = None if adapter is None else adapter.get(i)
+            tokens = block(tokens, prefix_kv=block_prefix, adapter=block_adapter)
         return self.norm(tokens)
 
     def forward(
@@ -122,6 +145,7 @@ class TinyViT(nn.Module):
         x: torch.Tensor,
         prompt_tokens: Optional[torch.Tensor] = None,
         prefix_kv: Optional[Dict[int, Tuple[torch.Tensor, torch.Tensor]]] = None,
+        adapter: Optional[Dict[int, nn.Module]] = None,
     ) -> torch.Tensor:
         """images -> pooled (cls-token) feature.
 
@@ -131,6 +155,9 @@ class TinyViT(nn.Module):
             prefix_kv: ``{block_index: (prefix_k, prefix_v)}`` spliced into
                 specific blocks' attention K/V (DualPrompt/CODA-style;
                 unused by L2P).
+            adapter: ``{block_index: Adapter}`` parallel bottleneck branches
+                around each block's MLP (APER-Adapter/EASE/RanPAC/MOS/TUNA;
+                unused by the prompt family).
         """
         b = x.shape[0]
         patches = self.patch_tokens(x)
@@ -143,5 +170,5 @@ class TinyViT(nn.Module):
         else:
             cls_index = 0
 
-        seq = self.forward_tokens(seq, prefix_kv=prefix_kv)
+        seq = self.forward_tokens(seq, prefix_kv=prefix_kv, adapter=adapter)
         return seq[:, cls_index]

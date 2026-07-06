@@ -357,3 +357,80 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   and green: registry-driven safety gate (24 cases), `clover smoke` (4/4
   methods OK), and per-method isolated unit tests for all three prompt
   methods plus SimpleCIL.
+
+- **2026-07-06, P6 (in progress, not ticked): APER-Adapter + RanPAC done,
+  EASE/MOS/TUNA queued.** Read-only research pass on `clover-pilot-bench`/
+  `_ref_pilot` (no code copied) confirmed all 5 remaining methods share one
+  AdaptFormer-style bottleneck adapter (down-proj -> ReLU -> up-proj,
+  scaled, zero-init up-proj) spliced as a parallel branch off the pre-MLP
+  residual stream in every block -- a new hook shape, distinct from P5's
+  `prefix_kv` (key/value splice), never wrapping `qkv`/`fc1`/`fc2` directly.
+  New shared infra: `clover/backbones/adapter.py` (`Adapter` +
+  `AdapterViT`/`vit_adapter`), a new `adapter: Optional[Dict[int,
+  nn.Module]]` parameter threaded through `TransformerBlock`/`TinyViT`
+  alongside `prefix_kv` (`clover/backbones/vit.py`).
+- **Deviates from SPEC §6.5's literal list order** ("APER-Adapter, EASE"
+  then "RanPAC, MOS, TUNA"): implementing in ascending mechanism-complexity
+  order instead -- APER-Adapter, RanPAC (both: adapter gradient-trained
+  only during the first experience then frozen forever, closed-form
+  non-gradient head, no growing per-task state) before EASE, MOS, TUNA
+  (each keeps a growing per-task adapter list plus a distinct combine
+  mechanism, and MOS/TUNA add classifier alignment on top) -- confirmed
+  with the user via plan-mode approval before implementing. Same rationale
+  P5 used to build L2P (simplest of the prompt trio) before DualPrompt/
+  CODA-Prompt.
+- New shared method base `clover/methods/adapter_common.py:
+  AdapterMethodBase`: "train adapter once (`exp.task_label == 0`,
+  generalizing PILOT's `cur_task == 0` gate to CLOVER's experience-index
+  equivalent), freeze forever, recompute a closed-form head every
+  experience" -- confirmed via research that both APER-Adapter's and
+  RanPAC's PILOT implementations skip gradient training entirely past task
+  0. A throwaway `_train_head` (gradient-trained jointly with the adapter
+  during experience 0 only, mirroring PILOT's `_init_train`) is
+  deliberately excluded from `state_dict()`/`load_state_dict()` -- it's
+  dead weight after experience 0 either way, and replaying
+  `before_experience(0)` on resume reconstructs it identically from
+  `stream_info` alone.
+- **APER-Adapter's dual-branch concat reuses one frozen base ViT instead of
+  loading a second checkpoint**: PILOT loads two separately-checkpointed
+  backbones (a fresh plain one + the adapter-tuned one) into
+  `MultiBranchCosineIncrementalNet`; here, since `AdapterViT.base` is
+  frozen (`requires_grad_(False)`, `.eval()`) at construction time, before
+  any adapter training happens, a plain pass via `backbone.base(x)` and an
+  adapter pass via `backbone(x)` already read the exact same frozen
+  weights -- no second model instance needed.
+- **RanPAC's ridge-regression head** (`clover/methods/heads.py:
+  RandomProjectionRidgeHead`) accumulates `G`/`Q` sufficient statistics
+  across experiences and re-solves `weight = solve(G + ridge*I, Q)` from
+  scratch every experience (not a literal Sherman-Morrison-Woodbury inverse
+  update -- confirmed this is what PILOT's own `ranpac.py` does too, not a
+  simplification). `M` (projection width) scaled from PILOT's 10000 down to
+  256 to fit `TinyViT`'s tiny feature dim. The ridge value is grid-searched
+  per experience against an 80/20 held-out split of that experience's own
+  data (`ranpac.py:_update_head`), using a locally-seeded
+  `torch.Generator()` (seeded from `exp.task_label`, not the run's actual
+  seed -- `TrainContext` doesn't thread a seed through to methods) rather
+  than the global RNG, per the standing "no bare global-RNG draws in
+  library code" rule -- this only affects which ridge candidate gets
+  picked, not the correctness of the closed-form solve itself.
+- **No dropout in the new `Adapter` module**, unlike PILOT's: discovered
+  that `clover/training/trainer.py`'s `Trainer.run()` constructs
+  `PerClassEvaluator(self.method.classifier(), ...)` (which calls `.eval()`
+  on the shared classifier module graph) once, before the experience loop
+  even starts -- since the classifier and the method's own training-time
+  modules are the *same* object references, this permanently disables
+  dropout for the rest of the run regardless of method. Adding a dropout
+  layer to `Adapter` would be dead code under this framework's current
+  Trainer design, not specific to these two methods, so it's omitted
+  entirely rather than included-but-inert.
+- Registry-driven safety gate needed **no hyperparameter retuning**: both
+  new methods pass all 6 scenarios first try at the existing tuned
+  `epochs=40, optimizer_lr=3e-2` (picked up automatically via
+  `list_methods()`, zero test-file changes).
+- `docs/methods.md` created (didn't exist before P6): comparison table for
+  all 9 methods (6 done, 3 queued) plus hyperparameter-provenance detail
+  for APER-Adapter/RanPAC.
+- Next: EASE (`clover/backbones/adapter_ease.py` + `clover/methods/
+  ease.py`) -- growing per-experience frozen adapter list, growing-dim head
+  with cosine-similarity cross-block reweighting. See handoff.md for the
+  full per-method design (EASE/MOS/TUNA) agreed in this session's plan.
