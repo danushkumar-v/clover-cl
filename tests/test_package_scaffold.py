@@ -17,7 +17,7 @@ def test_package_imports() -> None:
 
 
 def test_methods_registry_has_the_expected_p3_p5_methods() -> None:
-    assert set(list_methods()) == {"simplecil", "l2p", "dualprompt"}
+    assert set(list_methods()) == {"simplecil", "l2p", "dualprompt", "coda_prompt"}
 
 
 def test_scenario_registry_has_the_6_core_scenarios_since_p1() -> None:
@@ -36,7 +36,13 @@ def test_dataset_registry_has_the_synthetic_builtin_since_p2() -> None:
 
 
 def test_backbone_registry_has_the_expected_p2_p5_builtins() -> None:
-    assert set(list_backbones()) == {"tiny_mlp", "tiny_vit", "vit_prompt_pool", "vit_dual_prompt"}
+    assert set(list_backbones()) == {
+        "tiny_mlp",
+        "tiny_vit",
+        "vit_prompt_pool",
+        "vit_dual_prompt",
+        "vit_coda_prompt",
+    }
 
 
 @pytest.mark.parametrize(

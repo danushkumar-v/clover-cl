@@ -73,6 +73,19 @@ def test_mid_range_revisit_requires_enough_experiences():
         get_scenario("mid_range_revisit")(info, init_cls=5, increment=5, seed=42, anchor_task=4)
 
 
+def test_mid_range_revisit_requires_room_after_the_anchor_task():
+    """Regression: anchor_task must leave at least one experience *after*
+    it for the end_of_stream echo to land in -- an anchor at the literal
+    last experience has nowhere to place the revisit. init_cls=4/
+    increment=4 over 20 classes gives exactly 5 experiences (0..4), so
+    anchor_task=4 *is* the last one -- this must be rejected up front,
+    not surface as a planner placement failure later.
+    """
+    info = DatasetInfo("synthetic", 20)  # exactly 5 experiences at init_cls=4/increment=4
+    with pytest.raises(ValueError, match="needs at least"):
+        get_scenario("mid_range_revisit")(info, init_cls=4, increment=4, seed=42, anchor_task=4)
+
+
 def test_partial_overlap_mixes_fresh_and_echo_in_fixed_size_last_task():
     info = DatasetInfo("synthetic", 20)
     spec = get_scenario("partial_overlap")(info, init_cls=5, increment=5, seed=42, overlap_fraction=0.5)

@@ -14,7 +14,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - [x] **P2 — Label space + loss policies** (SPEC §5): LabelSpaceView on Experience; `methods/losses.py` (`new_class_ce`, `seen_class_ce`, `masked_logits`); synthetic dataset + 2-layer backbone stub; revisit-safety gate with a stub method. DONE: gate fails on a deliberately v1-L2P-broken stub (unmasked `-inf` CE) and passes on the fixed stub, across disjoint / same-id / echo synthetic streams.
 - [x] **P3 — CLMethod + Trainer + SimpleCIL** (SPEC §6.1–6.2): CLMethod ABC, TrainContext, incremental heads, core Trainer (seeding, loop, checkpoints/resume, status.json, per-class evaluator hookup); SimpleCIL end-to-end. DONE: SimpleCIL passes safety gate + smoke on CPU; interrupted-run resume test green; CIFAR-100 disjoint sanity run queued/verified on cluster ≈ published range (record in docs/methods.md). **CIFAR-100-on-cluster leg deferred — see Log.**
 - [x] **P4 — Config + CLI + cluster workflow** (SPEC §9, §11): typed YAML schemas with unknown-key rejection and layered defaults, `config_resolved.yaml`, run-dir artifacts; CLI `run` / `smoke` / `inspect` / `preflight`; smoke profile; `scripts/slurm_run.sh`. DONE: typo'd config fails pre-data naming the key; `clover run <cfg> --profile smoke` and `clover smoke` green on GPU-less CPU in <10 min; sbatch template submits and resumes on Snellius with only `#SBATCH` placeholders filled. **Actual Snellius submission unverified — see Log.**
-- [ ] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method. **IN PROGRESS — backbone registry + L2P + DualPrompt done, CODA-Prompt queued next — see Log. Not ticked.**
+- [x] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method. **CIFAR-100-vs-published leg deferred — see Log.**
 - [ ] **P6 — Remaining methods** (SPEC §6.5): APER-Adapter, EASE, RanPAC, MOS, TUNA (adapter wrappers as needed); hyperparameter defaults carried from bench configs with provenance notes. DONE: each passes safety gate + smoke + disjoint CIFAR-100 sanity vs. published range; comparison table in docs/methods.md covers all 9.
 - [ ] **P7 — Metrics + reporting + matrix** (SPEC §10): per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) + CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware) metrics ported with fixture tests; `clover report`; `run-matrix` orchestrator (resume/retry/stale/GPU-pool). DONE: hand-computed metric fixtures green; two-method synthetic demo report renders in CI; matrix resume test green.
 - [ ] **P8 — Datasets + extras + docs** (SPEC §7, §8, §13): CUB-200, ImageNet-R/A, OmniBenchmark, VTAB wrappers + staging docs; `image_folder` config-only dataset; scenario extras as capacity allows; docs/concepts.md, docs/extending.md (method/dataset/scenario/backbone worked examples). DONE: built-in metadata smoke tests green; a tutorial-followed custom dataset runs a full smoke benchmark without touching core.
@@ -287,3 +287,73 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   combination of every pool component (no top-k) plus Gram-Schmidt
   orthogonalization of new pool slots per task — the next continuation of
   this phase.
+
+- **2026-07-06, P5 complete: CODA-Prompt done, all three prompt methods
+  ticked.** `clover/backbones/coda_prompt.py:CodaPromptPool` combines the
+  *whole* unlocked-so-far pool via per-slot soft attention weights
+  (`softmax` over `cos_sim(query ⊙ attn_vec_i, key_i)`, no top-k) instead
+  of L2P/DualPrompt's hard selection. Each task's newly unlocked pool slice
+  (`pool_size // nb_experiences` slots) is Gram-Schmidt-orthogonalized
+  against every already-unlocked slice's *prompt content* (not just keys)
+  before training starts on it. `nb_experiences` must reach the backbone at
+  build time — `CODAPrompt.build()` overrides `PromptMethodBase.build()`
+  to inject `stream_info.nb_experiences` into the backbone kwargs rather
+  than changing the shared base (which would've broken L2P/DualPrompt's
+  factories, which don't accept that kwarg). The pool's `unlocked` counter
+  is a registered *buffer*, not a plain attribute, specifically so it
+  round-trips through `state_dict()`/`load_state_dict()` automatically —
+  needed for resume correctness with zero changes to `PromptMethodBase`'s
+  generic checkpoint logic.
+- **Explicitly omitted vs. the real method**: gradient masking that freezes
+  earlier tasks' pool components during later tasks' training. Without it,
+  every task's backward pass can perturb every unlocked slot, including
+  older ones. This is a deliberate, logged scope simplification (matching
+  L2P's omitted auxiliary key-pulling loss) — implementing it would need
+  either per-parameter gradient hooks or splitting the pool into separate
+  per-task parameter groups, more machinery than this phase's fidelity bar
+  needs. It's very likely *why* CODA-Prompt needed a higher learning rate
+  than L2P/DualPrompt to reliably pass (below).
+- **Extended the registry-driven safety gate to use the actual 6 registered
+  scenario factories** (not hand-built structural stand-ins) once it became
+  clear P5's own DONE criteria names "all 6 scenarios" specifically — turned
+  out simpler than the previous 4 hand-built shapes: every core scenario
+  except `disjoint_baseline` concentrates its revisit/echo signal in the
+  *last* train experience (`end_of_stream` or `every_task` placement always
+  includes it), so one generic check
+  (`revisiting_classes | echo_map` on `train_stream[-1]`) covers all 6
+  without per-scenario branching. Now 4 methods × 6 scenarios = 24 gate
+  cases, ~6 minutes total.
+- **Real bug found via this extension**: `clover/scenarios/
+  mid_range_revisit.py`'s feasibility check required
+  `max(3, anchor_task + 1)` experiences, which only guarantees the anchor
+  task itself exists — not that there's a further experience *after* it for
+  the `end_of_stream` echo to land in. With the gate's 5-experience test
+  stream and the scenario's default `anchor_task=4`, the anchor task *is*
+  the last experience, so `planner.resolve()` raised "Cannot place 1
+  revisit(s)... Maximum achievable: 0" deep inside the planner instead of a
+  clear, actionable error at spec-construction time. Fixed the check to
+  `max(3, anchor_task + 2)`; added a regression test
+  (`test_mid_range_revisit_requires_room_after_the_anchor_task`) pinning
+  exactly this boundary case. All prior P1 tests for this scenario were
+  unaffected (their anchor_task/dataset-size combinations already had
+  enough headroom).
+- **coda_prompt/echo-style scenarios (exact_replay, long_range_revisit,
+  mid_range_revisit, partial_overlap) needed `optimizer_lr=3e-2`**, not the
+  `1e-2` that sufficed for L2P/DualPrompt: an echoed sample and its source
+  share the exact same underlying synthetic-class pattern (only the noise
+  differs), so CODA's *soft, query-only* combination gives them
+  near-identical prompted features — the classifier head alone has to pull
+  apart two very similar feature vectors, needing a stronger gradient
+  signal than hard-selection methods (which incidentally get more
+  differentiating signal from *which* discrete prompts get concatenated).
+  Root-caused via the same debugging discipline as L2P's earlier detour
+  (checked training accuracy per-experience and per-class-confusion before
+  concluding it wasn't a code bug) — 1e-2 gave exactly-chance accuracy
+  (0.047 ≈ 1/20) on one seed, 3e-2 gave a reliable 0.40-0.47 margin,
+  verified this didn't regress any of the other 23 gate cases.
+- CIFAR-100-vs-published-accuracy verification remains deferred for the
+  same reason as P3/P4: no real CIFAR-100 dataset yet (P7/P8) and no
+  GPU/Snellius access this session. Everything locally verifiable is done
+  and green: registry-driven safety gate (24 cases), `clover smoke` (4/4
+  methods OK), and per-method isolated unit tests for all three prompt
+  methods plus SimpleCIL.

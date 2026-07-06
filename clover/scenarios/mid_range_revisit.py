@@ -20,10 +20,12 @@ def mid_range_revisit(
 
     Args:
         anchor_task: Index (0-based) of the task whose classes are echoed.
-            Requires at least ``max(3, anchor_task + 1)`` experiences.
+            Requires at least ``max(3, anchor_task + 2)`` experiences: the
+            anchor task itself, plus at least one experience after it for
+            the "end_of_stream" echo placement to land in.
     """
     increments = compute_increments(dataset_info.num_classes, init_cls, increment)
-    min_experiences = max(3, anchor_task + 1)
+    min_experiences = max(3, anchor_task + 2)
     if len(increments) < min_experiences:
         raise ValueError(
             f"mid_range_revisit needs at least {min_experiences} experiences "
