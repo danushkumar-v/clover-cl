@@ -1,7 +1,5 @@
-"""``clover`` entry point: run / smoke / inspect / preflight (SPEC §9, §11).
-
-``report`` (aggregating run artifacts) and ``run-matrix`` (sweeps,
-resume/retry/stale/GPU-pool orchestration) are P7 scope, not this phase's.
+"""``clover`` entry point: run / smoke / inspect / preflight / report /
+run-matrix (SPEC §9, §10-§11).
 """
 
 from __future__ import annotations
@@ -15,12 +13,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from clover.config import ResolvedConfig, load_yaml, resolve_config
+from clover.config import MatrixSection, ResolvedConfig, load_yaml, resolve_config
 from clover.core.planner import resolve as resolve_plan
 from clover.core.spec import DatasetInfo, StreamSpec
 from clover.core.stream import build_benchmark
 from clover.datasets import get_dataset
+from clover.matrix import cell_config, enumerate_cells, run_matrix
 from clover.methods import get_method, list_methods
+from clover.reporting import build_summary, rebuild_long_csv, write_long_csv, write_summary_csv
 from clover.training import RunConfig, Trainer
 
 _SMOKE_METHOD_INIT_CLS = 4
@@ -154,6 +154,41 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    rows = rebuild_long_csv(args.run_dirs)
+    long_csv_path = os.path.join(args.out, "all_runs_long.csv")
+    write_long_csv(rows, long_csv_path)
+
+    summary = build_summary(rows)
+    summary_path = os.path.join(args.out, "summary.csv")
+    write_summary_csv(summary, summary_path)
+
+    done_count = len({row["run_id"] for row in rows})
+    print(f"report: {done_count}/{len(args.run_dirs)} run(s) done, {len(rows)} row(s) aggregated")
+    print(f"  {long_csv_path}")
+    print(f"  {summary_path}")
+    return 0
+
+
+def cmd_run_matrix(args: argparse.Namespace) -> int:
+    raw = load_yaml(args.matrix)
+    matrix = MatrixSection.from_dict(raw)
+
+    # Preflight the first cell before dispatching the whole grid -- the
+    # bench lesson (AUDIT.md): this catches a shared config typo/unknown
+    # dataset fast instead of discovering it only after several cells
+    # have already been dispatched.
+    cells = enumerate_cells(matrix)
+    if cells:
+        resolve_config(cell_config(matrix, cells[0]))
+
+    result = run_matrix(matrix, confirm=args.confirm)
+    print(
+        f"run-matrix: {result['done']} done, {result['failed']} failed, {result['skipped']} skipped"
+    )
+    return 1 if result["failed"] else 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="clover")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -173,6 +208,18 @@ def _build_parser() -> argparse.ArgumentParser:
     preflight_parser = subparsers.add_parser("preflight", help="Validate a config before submitting a long run.")
     preflight_parser.add_argument("config")
     preflight_parser.set_defaults(func=cmd_preflight)
+
+    report_parser = subparsers.add_parser("report", help="Aggregate per-run artifacts into a long CSV + summary.")
+    report_parser.add_argument("run_dirs", nargs="+")
+    report_parser.add_argument("--out", default="results")
+    report_parser.set_defaults(func=cmd_report)
+
+    run_matrix_parser = subparsers.add_parser(
+        "run-matrix", help="Sweep methods x scenarios x datasets x seeds, with resume/retry/stale detection."
+    )
+    run_matrix_parser.add_argument("matrix")
+    run_matrix_parser.add_argument("--confirm", action="store_true")
+    run_matrix_parser.set_defaults(func=cmd_run_matrix)
 
     return parser
 

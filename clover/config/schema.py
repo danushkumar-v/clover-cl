@@ -185,6 +185,56 @@ class StreamSection:
 
 
 @dataclass
+class MatrixSection:
+    """``run-matrix`` sweep config (SPEC §11.1): a methods × scenarios ×
+    datasets × seeds grid. clover-cl configs are single-file/self
+    -contained (unlike the bench's per-method YAML directory), so
+    per-method hyperparameter differences are layered via
+    ``method_overrides`` on top of one shared ``training`` block, rather
+    than a separate config file per method.
+    """
+
+    methods: List[str]
+    scenarios: List[str]
+    datasets: List[str]
+    seeds: List[int]
+    stream: Dict[str, Any] = field(default_factory=dict)
+    training: Dict[str, Any] = field(default_factory=dict)
+    method_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    output_dir: str = "runs"
+
+    _ALLOWED_KEYS = frozenset(
+        {
+            "methods",
+            "scenarios",
+            "datasets",
+            "seeds",
+            "stream",
+            "training",
+            "method_overrides",
+            "output_dir",
+        }
+    )
+
+    @classmethod
+    def from_dict(cls, raw: Dict[str, Any]) -> "MatrixSection":
+        reject_unknown_keys(raw, cls._ALLOWED_KEYS, "matrix config")
+        for required in ("methods", "scenarios", "datasets", "seeds"):
+            if required not in raw:
+                raise ValueError(f"matrix config is missing required top-level key {required!r}.")
+        return cls(
+            methods=list(raw["methods"]),
+            scenarios=list(raw["scenarios"]),
+            datasets=list(raw["datasets"]),
+            seeds=[int(s) for s in raw["seeds"]],
+            stream=dict(raw.get("stream", {})),
+            training=dict(raw.get("training", {})),
+            method_overrides={k: dict(v) for k, v in raw.get("method_overrides", {}).items()},
+            output_dir=str(raw.get("output_dir", "runs")),
+        )
+
+
+@dataclass
 class MethodSection:
     """``extra`` passes through untyped to ``CLMethod.build(stream_info,
     cfg)`` -- per-method typed schemas (SPEC's "each method declares a typed

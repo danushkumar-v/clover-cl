@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from clover.config.loader import ResolvedConfig, load_yaml, resolve_config
 from clover.config.schema import (
+    MatrixSection,
     MethodSection,
     OptimizerConfig,
     RunSection,
@@ -20,4 +21,5 @@ __all__ = [
     "MethodSection",
     "TrainingSection",
     "OptimizerConfig",
+    "MatrixSection",
 ]

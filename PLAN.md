@@ -16,7 +16,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - [x] **P4 — Config + CLI + cluster workflow** (SPEC §9, §11): typed YAML schemas with unknown-key rejection and layered defaults, `config_resolved.yaml`, run-dir artifacts; CLI `run` / `smoke` / `inspect` / `preflight`; smoke profile; `scripts/slurm_run.sh`. DONE: typo'd config fails pre-data naming the key; `clover run <cfg> --profile smoke` and `clover smoke` green on GPU-less CPU in <10 min; sbatch template submits and resumes on Snellius with only `#SBATCH` placeholders filled. **Actual Snellius submission unverified — see Log.**
 - [x] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method. **CIFAR-100-vs-published leg deferred — see Log.**
 - [x] **P6 — Remaining methods** (SPEC §6.5): APER-Adapter, EASE, RanPAC, MOS, TUNA (adapter wrappers as needed); hyperparameter defaults carried from bench configs with provenance notes. DONE: each passes safety gate + smoke + disjoint CIFAR-100 sanity vs. published range; comparison table in docs/methods.md covers all 9. **CIFAR-100-vs-published leg deferred for all 5 (same reason as P3/P4/P5) — see Log.**
-- [ ] **P7 — Metrics + reporting + matrix** (SPEC §10): per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) + CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware) metrics ported with fixture tests; `clover report`; `run-matrix` orchestrator (resume/retry/stale/GPU-pool). DONE: hand-computed metric fixtures green; two-method synthetic demo report renders in CI; matrix resume test green.
+- [x] **P7 — Metrics + reporting + matrix** (SPEC §10): per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) + CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware) metrics ported with fixture tests; `clover report`; `run-matrix` orchestrator (resume/retry/stale/GPU-pool). DONE: hand-computed metric fixtures green; two-method synthetic demo report renders in CI; matrix resume test green. **GPU-pool parallelism deferred (sequential dispatch only) — see Log.**
 - [ ] **P8 — Datasets + extras + docs** (SPEC §7, §8, §13): CUB-200, ImageNet-R/A, OmniBenchmark, VTAB wrappers + staging docs; `image_folder` config-only dataset; scenario extras as capacity allows; docs/concepts.md, docs/extending.md (method/dataset/scenario/backbone worked examples). DONE: built-in metadata smoke tests green; a tutorial-followed custom dataset runs a full smoke benchmark without touching core.
 - [ ] **P9 — Release candidate** (SPEC §13–§14): docs/MIGRATION.md (legacy API → v2 configs), README (quickstart, smoke→SLURM workflow, scenario table, results, citations + no-copied-code attribution note); full matrix on cluster; tag RC. DONE: full 9-method × 6-scenario matrix reproduced on Snellius from shipped configs; README workflow verified end-to-end; `main` preserved as `v1` branch.
 
@@ -673,3 +673,77 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   (grid enumeration, `status.json`-based resume/retry/stale detection reusing
   the Trainer's existing schema, GPU-pool parallelism degrading to
   sequential on this CPU-only machine). Once both land: tick P7's box.
+
+- **2026-07-06, P7 complete: `clover report` + `run-matrix` done, all 3
+  pieces of this phase ticked.** `clover/reporting.py`: `parse_run_id`
+  (bench's own `{dataset}__{method}__{scenario}__seed{seed}` convention),
+  `rebuild_long_csv` (rebuild-from-scratch every invocation, only
+  `state=="done"` runs contribute rows -- never trust/append to a stale
+  aggregate), `build_summary` (last value per `(run_id, metric)`, averaged
+  over seeds per `(method, scenario, dataset)`, NaN entries excluded from
+  the average) -- all stdlib `csv`/`statistics`, no pandas. `clover/
+  matrix.py`: `enumerate_cells` (methods × scenarios × datasets × seeds),
+  `cell_config` (synthesizes a single-run config dict per cell -- new
+  `MatrixSection` schema in `clover/config/schema.py` carries a shared
+  `stream`/`training` block + optional per-method `method_overrides`,
+  since clover-cl configs are single-file/self-contained unlike the
+  bench's per-method YAML directory), `read_status`/`is_stale`/
+  `plan_dispatch` (pure, fixture-testable classification logic -- only
+  `state=="done"` is skipped; a stale `running` status, per the bench's
+  own 15-minute heartbeat threshold, is force-relabeled `failed` before
+  retry), `dispatch_cell` (writes the synthesized config, invokes `clover
+  run` as a subprocess -- crash isolation, matching the bench's actual
+  architecture rather than an in-process design). New CLI subcommands
+  `clover report`/`clover run-matrix` (the latter preflights the first
+  grid cell before dispatching the whole matrix, catching a shared-config
+  typo fast -- the same `AUDIT.md` lesson P4's `clover preflight` already
+  captures).
+- **A real gap found while designing `clover report`**:
+  `ResolvedConfig.stream_spec` (`clover/config/loader.py`, P4) is a
+  *post-resolution* `StreamSpec` -- scenario resolution already happened
+  before it was constructed, so `config_resolved.yaml` records the
+  concrete `revisits` but not the scenario *name* itself. Since the
+  summary pivot needs to group by scenario, and extending
+  `ResolvedConfig`/`config_resolved.yaml` for a P7-only need would touch
+  tested P4 code, the run-id-in-directory-name convention (bench's own
+  actual design, confirmed via research) was used instead --
+  `run-matrix` names every run dir this way by construction, so
+  `clover report`'s parser lines up automatically; an ad-hoc `clover run`
+  whose dir name doesn't parse still gets its rows aggregated (nothing
+  lost), just grouped as `"unknown"` in the summary.
+- **`run-matrix` dispatches via real subprocesses (`sys.executable -m
+  clover.cli run <config>`), not in-process** -- confirmed via research
+  this is what the bench's own orchestrator does, and for a real reason,
+  not just fidelity-for-its-own-sake: `CUDA_VISIBLE_DEVICES`-based GPU
+  pinning is fundamentally a process-level concern (all in-process
+  threads would share one process's CUDA visibility), and subprocess
+  isolation means one crashed/hung cell can't take down the rest of the
+  matrix.
+- **GPU-pool parallelism (the bench's `ThreadPoolExecutor` sized to
+  detected CUDA devices) is deferred, not built** -- this machine has no
+  GPU to run or test it against either way, and sequential dispatch
+  already fully satisfies "resume/retry/stale detection" (this phase's
+  actual DONE criterion). Logged explicitly as a follow-up rather than
+  silently dropped; adding it later is a pure enhancement (swap the `for
+  cell in to_run` loop for a thread pool), not a redesign, since
+  `dispatch_cell`/`plan_dispatch` are already pure/parallelizable
+  functions.
+- **Manual end-to-end verification caught a real Windows/Git-Bash
+  path-translation footgun, not a product bug**: testing `run-matrix`
+  against a `/tmp/...`-style path produced confusing "already done"
+  results after an `rm -rf` that appeared to have no effect -- Git Bash's
+  `/tmp` and Windows Python's interpretation of a leading-`/` path
+  resolve to *different directories* (`D:\tmp\...` for Python, since
+  there's no drive letter). Not a code issue; worth remembering for any
+  future manual CLI testing on this machine -- use a relative or
+  drive-lettered path, never a bare `/tmp/...` one, when testing through
+  Git Bash.
+- Full suite: 387 tests (24 new: reporting + matrix fixtures + 2 real
+  end-to-end CLI tests using actual subprocesses). `clover smoke` green
+  (9/9 methods). The `run-matrix` CLI tests are noticeably slower than
+  the rest of the suite (real subprocess spawns, ~40s for 3 tests) --
+  expect the full suite to take longer than prior phases as a result.
+- P7 is now fully done; all three pieces (metrics library, `clover
+  report`, `run-matrix`) ticked together in this entry since the last two
+  landed in the same session as this log entry. Next unchecked phase:
+  P8 — Datasets + extras + docs (SPEC §7, §8, §13).
