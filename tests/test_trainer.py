@@ -35,6 +35,7 @@ def test_trainer_writes_expected_run_artifacts(tmp_path):
     files = os.listdir(tmp_path)
     assert "status.json" in files
     assert "R_matrix.npy" in files
+    assert "per_task.csv" in files
     for t in range(benchmark.nb_experiences):
         assert f"ckpt_task{t:02d}.pt" in files
 

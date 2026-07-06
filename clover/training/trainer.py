@@ -16,6 +16,7 @@ orchestration territory.
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import random
@@ -31,7 +32,23 @@ from torch.utils.data import DataLoader, Dataset
 from clover.core.experience import Experience
 from clover.core.stream import Benchmark
 from clover.datasets.base import CLDataset
-from clover.evaluation import PerClassEvaluator, RMatrix
+from clover.evaluation import PerClassEvaluator, PerClassHistory, RMatrix
+from clover.evaluation.metrics import (
+    aggregate_accuracy,
+    anchor_classes,
+    anchor_retention,
+    average_incremental_accuracy,
+    backward_transfer,
+    classify_task,
+    echo_source_ids,
+    first_appearance_map,
+    forgetting,
+    forward_transfer,
+    long_range_retention,
+    rag_mean,
+    repetition_gain,
+    revisit_task_map,
+)
 from clover.methods.base import CLMethod, StreamInfo, TrainContext
 
 
@@ -120,6 +137,32 @@ class Trainer:
     def _r_matrix_path(self) -> str:
         return os.path.join(self.config.run_dir, "R_matrix.npy")
 
+    def _per_task_csv_path(self) -> str:
+        return os.path.join(self.config.run_dir, "per_task.csv")
+
+    def _read_per_task_rows(self) -> List[Tuple[int, str, float]]:
+        """Rows already written by an earlier (possibly crashed) run --
+        read back verbatim on resume rather than recomputed, since some
+        CLOVER metrics (e.g. RAG_mean) aggregate over the *whole* history
+        and would leak future information into an earlier task's row if
+        recomputed from today's fuller history instead of carried forward
+        as originally written."""
+        path = self._per_task_csv_path()
+        if not os.path.exists(path):
+            return []
+        with open(path, newline="") as fh:
+            reader = csv.DictReader(fh)
+            return [(int(row["task_idx"]), row["metric"], float(row["value"])) for row in reader]
+
+    def _write_per_task_rows(self, rows: List[Tuple[int, str, float]]) -> None:
+        path = self._per_task_csv_path()
+        tmp = path + ".tmp"
+        with open(tmp, "w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["task_idx", "metric", "value"])
+            writer.writerows(rows)
+        os.replace(tmp, path)
+
     def _latest_completed_task(self) -> Optional[int]:
         paths = sorted(glob(os.path.join(self.config.run_dir, "ckpt_task*.pt")))
         if not paths:
@@ -178,10 +221,23 @@ class Trainer:
         train_experiences = list(self.benchmark.train_stream)
         test_experiences = list(self.benchmark.test_stream)
 
+        # Bookkeeping for the CLOVER metrics (SPEC §10): computed once from
+        # the resolved stream/plan, not re-derived per experience.
+        first_appearance = first_appearance_map(self.benchmark.train_stream)
+        revisit_task = revisit_task_map(self.benchmark.train_stream)
+        anchor_ids = anchor_classes(self.benchmark.train_stream)
+        echo_table = self.benchmark.plan.echo_table
+        source_ids = sorted(echo_source_ids(echo_table))
+        retention_ids = (
+            source_ids if source_ids else (train_experiences[0].classes_in_this_experience if train_experiences else [])
+        )
+        final_task = self.benchmark.nb_experiences - 1
+
         latest_task = self._latest_completed_task()
         if latest_task is None:
             resume_from = 0
             r_matrix = RMatrix(self.benchmark.nb_experiences)
+            history = PerClassHistory()
         else:
             resume_from = latest_task + 1
             for exp in train_experiences[:resume_from]:
@@ -189,10 +245,17 @@ class Trainer:
             checkpoint = torch.load(self._checkpoint_path(latest_task), weights_only=False)
             self.method.load_state_dict(checkpoint["method_state"])
             r_matrix = RMatrix.from_array(checkpoint["r_matrix"])
+            history = PerClassHistory.from_dict(checkpoint["history"])
 
         self._write_status("running", resume_from - 1)
 
         evaluator = PerClassEvaluator(self.method.classifier(), self.test_dataset, device)
+        # Only trust rows for tasks the checkpoint confirms are actually
+        # done -- per_task.csv is written *before* the checkpoint each
+        # round, so a crash between the two writes can leave a stale row
+        # for the about-to-be-redone task; without this filter, resuming
+        # would duplicate it.
+        per_task_rows = [row for row in self._read_per_task_rows() if row[0] < resume_from]
 
         for exp in train_experiences:
             if exp.task_label < resume_from:
@@ -205,11 +268,35 @@ class Trainer:
 
             seen_test = test_experiences[: exp.task_label + 1]
             per_class_acc = evaluator.evaluate(seen_test)
+            history.record(exp.task_label, per_class_acc)
             for test_exp in seen_test:
                 first_app = test_exp.first_appearance_of
                 if first_app:
                     mean_acc = sum(per_class_acc[c] for c in first_app) / len(first_app)
                     r_matrix.update(test_exp.task_label, exp.task_label, mean_acc)
+
+            t = exp.task_label
+            R = r_matrix.to_array()
+            returning_ids, fresh_ids = classify_task(exp, echo_table, revisit_task, first_appearance)
+            per_task_rows.extend(
+                [
+                    (t, "A_t", aggregate_accuracy(R, t)),
+                    (t, "AIA", average_incremental_accuracy(R, t)),
+                    (t, "BWT", backward_transfer(R, t)),
+                    (t, "Forgetting", forgetting(R, t)),
+                    (t, "FWT", forward_transfer(R, t)),
+                    (t, "RAG_mean", rag_mean(history, first_appearance, revisit_task)),
+                    (t, "Repetition_Gain", repetition_gain(history, t, returning_ids, fresh_ids)),
+                ]
+            )
+            if t == final_task:
+                per_task_rows.extend(
+                    [
+                        (t, "Anchor_Retention", anchor_retention(history, anchor_ids, t)),
+                        (t, "Long_Range_Retention", long_range_retention(history, retention_ids, t)),
+                    ]
+                )
+            self._write_per_task_rows(per_task_rows)
 
             r_matrix.save(self._r_matrix_path())
             _atomic_torch_save(
@@ -217,6 +304,7 @@ class Trainer:
                     "task": exp.task_label,
                     "method_state": self.method.state_dict(),
                     "r_matrix": r_matrix.to_array(),
+                    "history": history.to_dict(),
                 },
                 self._checkpoint_path(exp.task_label),
             )

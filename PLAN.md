@@ -597,3 +597,79 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   methods × 6 scenarios), `clover smoke` (9/9 methods OK), and per-method
   isolated unit tests for all 5 adapter-family methods. `docs/methods.md`
   now covers all 9 methods with hyperparameter provenance tables.
+
+- **2026-07-06, P7 (in progress, not ticked): metrics library + Trainer
+  wiring done; `clover report`/`run-matrix` queued.** Read-only research
+  pass on `clover-pilot-bench` (no code copied) confirmed the exact
+  formulas for the 5 standard metrics (pure R-matrix reductions) and the 4
+  CLOVER-specific ones (need a per-class accuracy history, not derivable
+  from the R-matrix). New `clover/evaluation/history.py:PerClassHistory`
+  (`{class_id: {task: accuracy}}`) persists what `Trainer.run()` already
+  computed via `PerClassEvaluator.evaluate` every experience but previously
+  discarded after reducing it to the R-matrix's mean -- no new evaluation
+  pass needed. New `clover/evaluation/metrics/{standard,overlap}.py`: 5
+  standard functions (`aggregate_accuracy`/`average_incremental_accuracy`/
+  `backward_transfer`/`forgetting`/`forward_transfer`) + CLOVER bookkeeping
+  helpers (`first_appearance_map`/`revisit_task_map`/`anchor_classes`/
+  `echo_source_ids`/`classify_task`, all derived from `Experience.
+  first_appearance_of`/`.revisiting_classes`/`.echo_map` and `StreamPlan.
+  echo_table` -- no manual class-id scanning needed, unlike the bench's own
+  reconstruction from raw task lists) + 4 metric functions (`rag_per_class`/
+  `rag_mean`/`repetition_gain`/`anchor_retention`/`long_range_retention`) +
+  an `image_level_bonus` NaN stub (bench never wired this one up either).
+- **`forward_transfer` is PILOT's own zero-baseline approximation, not a
+  true FWT** (confirmed via research: the "baseline" is hardcoded to 0,
+  "no zero-shot knowledge assumed") -- kept as-is and documented plainly in
+  the docstring rather than silently "fixing" it into a different metric,
+  since SPEC's instruction is "ported from bench/metrics/standard.py."
+- **`revisit_task_map` only records each class's *first* revisit** -- a
+  known bench limitation (a class revisiting 3+ times only ever scores its
+  first revisit for RAG), kept as-is for fidelity rather than generalized,
+  and documented in the docstring.
+- **Trainer wiring**: `PerClassHistory` persisted/restored in the
+  checkpoint dict (`ckpt_task*.pt`) exactly like `r_matrix` already is.
+  Standard + CLOVER metrics (RAG_mean, Repetition_Gain) computed every
+  experience; Anchor_Retention/Long_Range_Retention only at the *final*
+  experience, matching the bench's own "read at final task" design.
+  Written to `runs/<name>/per_task.csv` (`task_idx,metric,value`, matching
+  the bench's per-run schema exactly) via a full atomic rewrite each round
+  (this Trainer is single-process per run, so the bench's OS-level
+  file-locking for concurrent multi-process writers isn't needed).
+- **Real bug found and fixed while writing the resume test**: `per_task.csv`
+  is written *before* the checkpoint each round (so a stream reader always
+  sees a task's metrics as soon as they're known); this means a crash
+  between the two writes leaves a stale row for the about-to-be-redone
+  task, which a naive "read existing rows + append" resume would duplicate
+  on top of. Fixed by filtering `_read_per_task_rows()` to `task_idx <
+  resume_from` before appending new rows -- only rows for tasks the
+  checkpoint actually confirms are done are trusted, mirroring how
+  `resume_from` itself is already the sole authority for what counts as
+  "done." Caught by `tests/test_trainer_per_task_csv.py::
+  test_resume_does_not_duplicate_stale_rows_for_the_redone_task`, which
+  simulates exactly this crash window (deletes only the last checkpoint,
+  not `per_task.csv`).
+- **Per-task rows are read back verbatim on resume, never recomputed from
+  the fuller post-resume history** -- some CLOVER metrics (e.g. `RAG_mean`)
+  aggregate over the *whole* history rather than being strictly
+  task-scoped; recomputing an earlier task's row using today's fuller
+  history would leak future information into it (e.g. task 0's row would
+  already reflect a revisit that happens at task 3). The standard metrics
+  and `Repetition_Gain` are naturally immune to this (they only ever read
+  `R`/history entries with column/task `<= t`), but the read-back-verbatim
+  design avoids relying on that per-metric distinction being airtight.
+- Verified end-to-end (not just via fixtures) that CLOVER metrics produce
+  real, non-NaN values through the actual Trainer on real scenarios:
+  `Long_Range_Retention`/`Repetition_Gain` non-NaN under `partial_overlap`
+  (echo-based revisits), `RAG_mean`/`Anchor_Retention` non-NaN under
+  `cumulative_drift` (same-id revisits/anchors) -- confirms the echo-vs
+  -same-id split in `classify_task`/`revisit_task_map` is wired correctly,
+  not just correct in isolated fixture tests.
+- Full suite: 363 tests (57 new: metrics fixtures + Trainer/per_task.csv
+  tests). `clover smoke` green (9/9 methods).
+- Next: `clover report <run_dirs...>` (rebuild-from-scratch aggregate CSV +
+  method×scenario×dataset summary pivot -- **no pandas**, CLAUDE.md pins
+  runtime deps to exactly torch/torchvision/timm/numpy/pyyaml/pillow; use
+  the stdlib `csv` module + plain dicts), then the `run-matrix` orchestrator
+  (grid enumeration, `status.json`-based resume/retry/stale detection reusing
+  the Trainer's existing schema, GPU-pool parallelism degrading to
+  sequential on this CPU-only machine). Once both land: tick P7's box.

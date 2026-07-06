@@ -1,4 +1,4 @@
-# Handoff — clover-cl v2 (2026-07-06: P6 complete, all 9 methods done)
+# Handoff — clover-cl v2 (2026-07-06: P7 in progress, metrics library done)
 
 Session notes for picking this back up cold in a fresh Claude Code session.
 Read this first, then `CLAUDE.md` → `PLAN.md` → the relevant `SPEC.md`
@@ -7,18 +7,19 @@ section for the next phase.
 ## State right now
 
 - Repo: `D:\Dev\Research\clover-cl`. Work branch: `v2`.
-- `v2` was pushed to `origin/v2` (`b444ec2`) through P5. **This session's
-  full P6 work (all 5 remaining methods) is committed locally in 4 commits
-  but not yet pushed** — push only if the user asks.
+- `v2` was pushed to `origin/v2` (`b444ec2`) through P5. **P6 (4 commits)
+  and this session's P7 sub-pass A are committed locally but not yet
+  pushed** — push only if the user asks.
 - `main` is untouched at `a01eaf7` (v1, preserved as-is until the P9 release
   per SPEC.md — do not merge or push to `main` before then).
 - `PLAN.md`: **P0-P6 all done and ticked. P7 (Metrics + reporting + matrix)
-  is the next unchecked phase.**
+  is in progress (not ticked) — the metrics library + Trainer wiring are
+  done; `clover report` and the `run-matrix` orchestrator are queued.**
 - Local `.venv` (Python 3.11) has everything installed (`pip install -e
   ".[dev]"` already run) — torch/torchvision/timm/pyyaml/pillow +
   pytest/ruff/mypy/types-PyYAML.
-- Current test suite: **337 tests**, full `pytest tests/ -v` run takes
-  **~5-8 minutes** (varies) — the registry-driven safety gate
+- Current test suite: **363 tests**, full `pytest tests/ -v` run takes
+  **~4-8 minutes** (varies) — the registry-driven safety gate
   (`tests/test_method_registry_safety_gate.py`) is the expensive part (54
   cases: 9 methods × 6 scenarios, each a real short training run). Budget
   for this when working — don't assume the suite is fast.
@@ -99,6 +100,19 @@ section for the next phase.
     *existing* tuned hyperparameters (`epochs=40, optimizer_lr=3e-2`), no
     retuning needed anywhere in this phase. `docs/methods.md` now covers
     all 9 methods with hyperparameter-provenance tables.
+- **P7 (in progress) — metrics library + Trainer wiring done**: new
+  `clover/evaluation/history.py:PerClassHistory` (`{class_id: {task:
+  accuracy}}`) persists what `Trainer.run()` already computed via
+  `PerClassEvaluator.evaluate` every experience but previously discarded.
+  New `clover/evaluation/metrics/standard.py` (5 pure R-matrix reductions:
+  `aggregate_accuracy`/`average_incremental_accuracy`/`backward_transfer`/
+  `forgetting`/`forward_transfer`) and `overlap.py` (echo-aware bookkeeping
+  helpers + `rag_per_class`/`rag_mean`/`repetition_gain`/
+  `anchor_retention`/`long_range_retention`/`image_level_bonus` stub).
+  Trainer now writes `runs/<name>/per_task.csv` every experience
+  (standard + CLOVER metrics; Anchor/Long-Range Retention only at the
+  final experience) and persists `PerClassHistory` in the checkpoint.
+  `clover report`/`run-matrix` are next — see "Next up" below.
 
 ## Deferred items (logged in `PLAN.md`'s `## Log`, not forgotten)
 
@@ -193,37 +207,74 @@ section for the next phase.
   runs; keep doing that for any new per-experience randomness (P3's
   original finding, reconfirmed relevant for MOS/RanPAC's own local
   generators in P6).
+- **A per-run artifact written *before* its corresponding checkpoint can go
+  stale on a crash** — `per_task.csv` is written before `ckpt_task*.pt`
+  each round (P7), so a crash between the two writes leaves a row for a
+  task the checkpoint doesn't yet confirm as done. A naive "read existing
+  rows + append" resume would duplicate it. Fixed by filtering read-back
+  rows to `task_idx < resume_from` — only what the checkpoint actually
+  confirms is trusted, same principle as `resume_from` itself being the
+  sole authority for "done." Worth checking for any *other* pre-checkpoint
+  artifact write a future phase adds.
+- **Recomputing a historical value from today's fuller state can leak
+  future information into it** — some CLOVER metrics (`RAG_mean`) aggregate
+  over the *whole* run's history rather than being strictly task-scoped;
+  P7's `per_task.csv` rows are read back verbatim on resume rather than
+  recomputed, specifically to avoid an earlier task's row silently
+  reflecting a revisit that hadn't happened yet when it was first written.
 
-## Next up: P7 — Metrics + reporting + matrix (SPEC §10)
+## Next up: P7 continued — `clover report` + `run-matrix` (SPEC §10-§11)
 
-Per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) +
-CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware)
-metrics ported with fixture tests; `clover report`; `run-matrix`
-orchestrator (resume/retry/stale/GPU-pool).
+The metrics library + Trainer wiring are done (this session). Two pieces
+left in this phase:
 
-DONE: hand-computed metric fixtures green; two-method synthetic demo report
-renders in CI; matrix resume test green.
+- **`clover report <run_dirs...>`**: rebuild-from-scratch aggregate long
+  CSV (never trust/append to a stale one — `AUDIT.md`'s "aggregate CSV
+  drifts during failed-run debugging; per-run `per_task.csv` is
+  authoritative" lesson, confirmed via research this is exactly what the
+  bench's `scripts/04_rebuild_long_csv.py` does: glob run dirs, skip any
+  whose `status.json` isn't `"done"`, concatenate each `per_task.csv`,
+  overwrite the aggregate wholesale) + a method×scenario×dataset summary
+  pivot (last value per `(run,metric)`, grouped). **No pandas** —
+  CLAUDE.md pins runtime deps to exactly torch/torchvision/timm/numpy/
+  pyyaml/pillow; implement with the stdlib `csv` module + plain dicts
+  (`clover/evaluation/history.py`'s `PerClassHistory` and the metrics
+  module already avoid pandas, so this continues that constraint, not a
+  new one).
+- **`run-matrix` orchestrator**: grid enumeration (methods × scenarios ×
+  datasets × seeds from a flat matrix YAML — bench's `matrix_full.yaml`
+  shape: top-level `methods:`/`scenarios:`/`datasets:`/`seeds:` lists, no
+  per-cell overrides), `status.json`-based resume/retry/stale-run detection
+  (reusing the Trainer's existing `status.json` schema — `state`/
+  `last_completed_task`/`heartbeat`, already written every experience by
+  `Trainer._write_status`), a run-id naming convention
+  (`{dataset}__{method}__{scenario}__seed{seed}`, matching the bench's so
+  `clover report`'s glob/parse logic lines up). GPU-pool parallelism should
+  degrade to sequential single-worker on this CPU-only machine (matching
+  the bench's own `detect_gpus()` → `[None]` fallback) — a `ThreadPoolExecutor`
+  sized to detected CUDA devices (or 1) is enough; don't over-build
+  subprocess/signal-handling machinery beyond what a fixture-testable
+  "matrix resume test green" DONE criterion actually needs.
 
-Suggested first step: read SPEC §10 closely, and read `clover/evaluation/`
-(existing `PerClassEvaluator`/`RMatrix` from P3) to see what's already
-there vs. what this phase adds. The bench's `analysis/clover_viz.py` and
-the CLOVER-specific metrics (RAG, Repetition Gain, Anchor/Long-Range
-Retention) are referenced in `AUDIT.md`/`SPEC.md` — worth a read-only look
-at `clover-pilot-bench/analysis/` for the metric definitions actually used
-in the published headline result (no code copied, same research-then-plan
-pattern as P5/P6).
+Once both land: tick P7's checkbox in `PLAN.md`.
+
+Read-only research on the bench's exact metrics formulas, echo-aware
+retention semantics, `04_rebuild_long_csv.py`'s rebuild logic, and the
+orchestrator's status/staleness/retry design was already done this
+session — check `PLAN.md`'s 2026-07-06 P7 log entry before re-deriving
+any of it from scratch.
 
 ## Quick commands
 
 ```
 cd D:\Dev\Research\clover-cl
-.venv/Scripts/python.exe -m pytest tests/ -v                     # full suite, ~5-8 min
+.venv/Scripts/python.exe -m pytest tests/ -v                     # full suite, ~4-8 min
 .venv/Scripts/python.exe -m ruff check clover tests
 .venv/Scripts/python.exe -m mypy clover/core clover/config
 .venv/Scripts/python.exe -m clover.cli smoke                     # all 9 registered methods
 git checkout v2 && git pull                                      # resume from here
 ```
 
-Delete this file once P7 is underway and this content is stale, or update
+Delete this file once P7 is fully done and this content is stale, or update
 it in place at the end of each future session — whichever the next session
 prefers.
