@@ -24,6 +24,7 @@ def test_methods_registry_has_the_expected_p3_p6_methods() -> None:
         "coda_prompt",
         "aper_adapter",
         "ranpac",
+        "ease",
     }
 
 
@@ -50,6 +51,7 @@ def test_backbone_registry_has_the_expected_p2_p6_builtins() -> None:
         "vit_dual_prompt",
         "vit_coda_prompt",
         "vit_adapter",
+        "vit_adapter_ease",
     }
 
 

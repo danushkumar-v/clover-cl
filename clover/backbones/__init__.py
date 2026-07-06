@@ -21,6 +21,7 @@ __all__ = ["register_backbone", "get_backbone", "list_backbones"]
 # register_backbone binding above, since these modules import it back.
 from clover.backbones import (  # noqa: E402
     adapter,
+    adapter_ease,
     coda_prompt,
     dual_prompt,
     prompt_pool,
@@ -28,4 +29,12 @@ from clover.backbones import (  # noqa: E402
     vit,
 )
 
-__all__ += ["tiny_mlp", "vit", "prompt_pool", "dual_prompt", "coda_prompt", "adapter"]
+__all__ += [
+    "tiny_mlp",
+    "vit",
+    "prompt_pool",
+    "dual_prompt",
+    "coda_prompt",
+    "adapter",
+    "adapter_ease",
+]

@@ -8,12 +8,12 @@ section for the next phase.
 
 - Repo: `D:\Dev\Research\clover-cl`. Work branch: `v2`.
 - `v2` was pushed to `origin/v2` (`b444ec2`) through P5. **This session's
-  P6 work (APER-Adapter + RanPAC) is committed locally but not yet
+  P6 work (APER-Adapter + RanPAC + EASE) is committed locally but not yet
   pushed** — push only if the user asks.
 - `main` is untouched at `a01eaf7` (v1, preserved as-is until the P9 release
   per SPEC.md — do not merge or push to `main` before then).
 - `PLAN.md`: **P0-P5 done and ticked. P6 is in progress (not ticked) —
-  APER-Adapter and RanPAC are done; EASE, MOS, TUNA are queued.**
+  APER-Adapter, RanPAC, and EASE are done; MOS, TUNA are queued.**
 - Local `.venv` (Python 3.11) has everything installed (`pip install -e
   ".[dev]"` already run) — torch/torchvision/timm/pyyaml/pillow +
   pytest/ruff/mypy/types-PyYAML.
@@ -61,8 +61,8 @@ section for the next phase.
   DualPrompt (prefix-KV general+expert prompts), CODA-Prompt (prefix-KV,
   soft attention-weighted pool + Gram-Schmidt orthogonalization). All three
   share `methods/prompt_common.py:PromptMethodBase`.
-- **P6 (in progress) — APER-Adapter + RanPAC done**: new adapter hook
-  (`adapter: Optional[Dict[int, nn.Module]]`, parallel branch off the
+- **P6 (in progress) — APER-Adapter + RanPAC + EASE done**: new adapter
+  hook (`adapter: Optional[Dict[int, nn.Module]]`, parallel branch off the
   pre-MLP residual stream) threaded through `TransformerBlock`/`TinyViT`
   alongside `prefix_kv`; `clover/backbones/adapter.py` (`Adapter` +
   `AdapterViT`/`vit_adapter`); `clover/methods/adapter_common.py:
@@ -72,17 +72,22 @@ section for the next phase.
   base ViT for both the plain and adapter-tuned pass — no second checkpoint
   needed); RanPAC (`RandomProjectionRidgeHead` in `methods/heads.py`:
   `relu(x @ W_rand)` + accumulated `G`/`Q` sufficient statistics + grid
-  -searched ridge, re-solved every experience). EASE, MOS, TUNA are next —
-  see PLAN.md's P6 Log entry and "Next up" below for the full per-method
-  design already agreed with the user.
+  -searched ridge, re-solved every experience). EASE
+  (`clover/backbones/adapter_ease.py:EaseAdapterViT` — growing per
+  -experience adapter list, only the most recent set trainable;
+  `clover/methods/heads.py:EaseHead` — growing-dim cosine head with
+  per-class "home block" + `alpha`-scaled cross-block reweighting;
+  `clover/methods/ease.py`). MOS, TUNA are next — see PLAN.md's P6 Log
+  entry and "Next up" below for the full per-method design already agreed
+  with the user.
 
-Current test suite: **273 tests**, full `pytest tests/ -v` run takes
-**~2.5-3 minutes** — the registry-driven safety gate
-(`tests/test_method_registry_safety_gate.py`) is the expensive part (36
-cases: 6 methods × 6 scenarios, each a real short training run). Budget for
-this when working — don't assume the suite is fast. Both new P6 methods
-passed the gate at the *existing* tuned hyperparameters (`epochs=40,
-optimizer_lr=3e-2`) with no retuning needed.
+Current test suite: **293 tests**, full `pytest tests/ -v` run takes
+**~5-6 minutes** — the registry-driven safety gate
+(`tests/test_method_registry_safety_gate.py`) is the expensive part (42
+cases: 7 methods × 6 scenarios, each a real short training run). Budget for
+this when working — don't assume the suite is fast. All three new P6
+methods passed the gate at the *existing* tuned hyperparameters
+(`epochs=40, optimizer_lr=3e-2`) with no retuning needed.
 
 ## Deferred items (logged in `PLAN.md`'s `## Log`, not forgotten)
 
@@ -111,6 +116,10 @@ optimizer_lr=3e-2`) with no retuning needed.
   headline mechanism (MOS's continuous EMA merge; TUNA's EMR merge), which
   *will* be implemented in full. Agreed with the user in this session's
   plan-mode approval before any EASE/MOS/TUNA code was written.
+- **EASE's `beta`/`use_init_ptm` (init-PTM block in the reweighting) and
+  `use_diagonal`/`moni_adam` (vestigial ablation flags upstream) are not
+  reimplemented** — upstream defaults them off/unused anyway; see
+  `docs/methods.md`'s EASE hyperparameter table.
 
 ## Judgment calls worth knowing about (so P6 doesn't re-litigate them)
 
@@ -137,9 +146,23 @@ optimizer_lr=3e-2`) with no retuning needed.
   growing per-task adapter list every experience — neither matches
   `PromptMethodBase`'s "trainable prompt + gradient-trained head every
   experience" shape). New base: `clover/methods/adapter_common.py:
-  AdapterMethodBase`, used only by APER-Adapter/RanPAC; EASE/MOS/TUNA will
-  each need their own method module (not this shared base) since their
-  per-task-list/merge bookkeeping differs enough from each other too.
+  AdapterMethodBase`, used only by APER-Adapter/RanPAC. **Confirmed while
+  building EASE: it doesn't fit this base either** (EASE trains every
+  experience, not just the first) — EASE is a standalone `CLMethod`, and
+  MOS/TUNA will each need their own module too, not a shared base, since
+  their per-task-list/merge bookkeeping differs enough from each other too.
+- **Any per-experience structural growth that must be reflected before
+  `load_state_dict` runs belongs in `before_experience`, never
+  `train_experience`/`after_experience`** — the Trainer's resume-replay
+  only re-invokes `before_experience` for already-completed experiences.
+  This bit EASE directly: `EaseAdapterViT.grow()` and `EaseHead.add_block`/
+  `expand_classes` all live in `EASE.before_experience` for exactly this
+  reason (see PLAN.md's P6-continued log entry for the full reasoning,
+  including why putting `grow()` in `after_experience` would silently drop
+  the *final* experience's adapter even on a live, non-resumed run). MOS/
+  TUNA will hit the same constraint for their own per-experience adapter
+  bookkeeping — plan for it up front rather than discovering it via a
+  resume-test failure.
 - **mypy's `clover/core clover/config` gate transitively pulls in whatever
   those modules import** — `clover/config` imports from `clover/training`,
   which imports `clover/methods`, which imports every registered method
@@ -179,21 +202,12 @@ optimizer_lr=3e-2`) with no retuning needed.
   check. Keep any future closed-form-solved head weight as a Parameter for
   the same reason.
 
-## Next up: P6 continued — EASE, MOS, TUNA (SPEC §6.5)
+## Next up: P6 continued — MOS, TUNA (SPEC §6.5)
 
-APER-Adapter and RanPAC are done (this session). Full per-method design was
-agreed with the user via plan-mode approval before any of this session's
-code was written — the design still holds for the next 3:
+APER-Adapter, RanPAC, and EASE are done. Full per-method design was agreed
+with the user via plan-mode approval before this phase's code was written —
+the design still holds for the last 2:
 
-- **EASE** (`clover/backbones/adapter_ease.py` + `clover/methods/ease.py`):
-  growing per-experience frozen adapter list (`add_adapter` in
-  `after_experience`); new `EaseHead` (`clover/methods/heads.py`) whose
-  feature-dim grows every experience (concat of every adapter's `[CLS]`
-  features) — new-block class rows via prototype means, cross-block rows
-  via cosine-similarity interpolation from other blocks. Per-experience
-  training uses a small "proxy" head over just the current adapter +
-  `new_class_ce` (P2's loss policy already makes EASE's real
-  `aux_targets`/`ignore_index=-1` patch unnecessary).
 - **MOS** (`clover/backbones/adapter_mos.py` + `clover/methods/mos.py`):
   per-experience adapter gradient-trained with `new_class_ce`, continuously
   EMA-blended toward the running mean of previous experiences' adapters
@@ -221,18 +235,19 @@ DONE (whole phase, all 5 methods): each passes the safety gate + smoke + a
 disjoint CIFAR-100 sanity run vs. published range (CIFAR-100 leg deferred,
 same pattern as P3/P4/P5 — implement and verify everything locally
 checkable, log the cluster-dependent piece as deferred); comparison table
-in `docs/methods.md` covers all 9 methods (currently 6 of 9 rows filled in).
+in `docs/methods.md` covers all 9 methods (currently 7 of 9 rows filled in).
 
 Read-only research on the exact PILOT mechanism (files, line numbers,
 hyperparameters, known bugs) for all 5 adapter-family methods was already
-done this session — check `PLAN.md`'s 2026-07-06 P6 log entry and this
-file's `docs/methods.md` before re-deriving it from scratch.
+done in this phase's first session — check `PLAN.md`'s 2026-07-06 P6 log
+entries and this file's `docs/methods.md` before re-deriving it from
+scratch.
 
 ## Quick commands
 
 ```
 cd D:\Dev\Research\clover-cl
-.venv/Scripts/python.exe -m pytest tests/ -v                     # full suite, ~2.5-3 min
+.venv/Scripts/python.exe -m pytest tests/ -v                     # full suite, ~5-6 min
 .venv/Scripts/python.exe -m ruff check clover tests
 .venv/Scripts/python.exe -m mypy clover/core clover/config
 .venv/Scripts/python.exe -m clover.cli smoke                     # all registered methods

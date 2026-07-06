@@ -2,8 +2,8 @@
 
 ``simplecil`` (P3) and the full prompt trio -- ``l2p``, ``dualprompt``,
 ``coda_prompt`` (P5) -- are registered. The adapter family (APER-Adapter,
-EASE, RanPAC, MOS, TUNA) lands in P6; ``aper_adapter``/``ranpac`` are done,
-``ease``/``mos``/``tuna`` are queued.
+EASE, RanPAC, MOS, TUNA) lands in P6; ``aper_adapter``/``ranpac``/``ease``
+are done, ``mos``/``tuna`` are queued.
 """
 
 from __future__ import annotations
@@ -24,9 +24,18 @@ from clover.methods import (  # noqa: E402
     aper_adapter,
     coda_prompt,
     dual_prompt,
+    ease,
     l2p,
     ranpac,
     simple_cil,
 )
 
-__all__ += ["simple_cil", "l2p", "dual_prompt", "coda_prompt", "aper_adapter", "ranpac"]
+__all__ += [
+    "simple_cil",
+    "l2p",
+    "dual_prompt",
+    "coda_prompt",
+    "aper_adapter",
+    "ranpac",
+    "ease",
+]

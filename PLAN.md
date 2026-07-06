@@ -430,7 +430,52 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - `docs/methods.md` created (didn't exist before P6): comparison table for
   all 9 methods (6 done, 3 queued) plus hyperparameter-provenance detail
   for APER-Adapter/RanPAC.
-- Next: EASE (`clover/backbones/adapter_ease.py` + `clover/methods/
-  ease.py`) -- growing per-experience frozen adapter list, growing-dim head
-  with cosine-similarity cross-block reweighting. See handoff.md for the
-  full per-method design (EASE/MOS/TUNA) agreed in this session's plan.
+
+- **2026-07-06, P6 continued (still in progress, not ticked): EASE done.**
+  `clover/backbones/adapter_ease.py:EaseAdapterViT` keeps a growing
+  `nn.ModuleList` of per-experience adapter sets (only the most recent one
+  ever trainable); `clover/methods/heads.py:EaseHead` stores
+  `[num_classes, num_blocks, block_dim]` with a per-class "home block" and
+  PILOT's cosine-similarity block-reweighting (`alpha`-scaled non-home
+  blocks). Registry-driven safety gate (all 6 scenarios) and `clover smoke`
+  both green at the *existing* tuned hyperparameters, no retuning needed.
+- **`grow()` (freeze-then-allocate a new adapter set) lives in
+  `EASE.before_experience`, not `after_experience`** -- discovered while
+  designing this that `after_experience` would be actively wrong for
+  resume: the Trainer's resume-replay only re-invokes `before_experience`
+  for already-completed experiences (never `after_experience`), so any
+  structural growth needed before `load_state_dict` succeeds must happen
+  there. Putting `grow()`/`head.add_block()`/`head.expand_classes()` in
+  `after_experience` instead would also silently drop the *final*
+  experience's adapter from a live (non-resumed) run entirely, since no
+  `before_experience(N)` call ever follows the last experience `N-1` to
+  trigger it. This generalizes the same reasoning `IncrementalHead.
+  expand_to`/CODA-Prompt's `pool.start_new_task` already follow -- worth
+  remembering for MOS/TUNA too, which also grow per-experience state.
+- **New classes get real (not approximated) prototype rows in *every*
+  block, including old ones** -- this experience's images are still on
+  hand and old (frozen) adapters are still available, so there's no need
+  to approximate a new class's response under an old adapter the way
+  PILOT's `solve_similarity` does. Only *already-existing* classes' row in
+  the newly-added block is approximated (cosine-similarity-weighted
+  combination of this round's new classes' own rows in that block), since
+  their images are genuinely gone (no exemplar memory in this framework) --
+  matches exactly why PILOT itself needs `solve_similarity`/
+  `solve_sim_reset` there and nowhere else.
+- EASE's proxy head is full-global-width (`AdapterMethodBase`'s
+  `_train_head` pattern), not locally indexed to this round's new classes
+  the way PILOT's `proxy_fc` is -- avoids a second targets-remapping
+  mechanism alongside `new_class_ce`'s existing set-membership masks;
+  functionally equivalent since gradient only ever reaches the new-class
+  columns either way. Not serialized (thrown away after each experience,
+  like `_train_head`); confirmed `EaseHead.home_block` (a plain Python
+  list, not a tensor) also doesn't need explicit serialization -- replaying
+  `before_experience` across a resume reconstructs it identically, since
+  it's built purely from `exp.label_space` (deterministic, spec-derived),
+  not from any trained value.
+- Next: MOS (`clover/backbones/adapter_mos.py` + `clover/methods/mos.py`)
+  -- per-experience adapter continuously EMA-merged toward the running
+  mean of previous adapters during training, plus classifier alignment
+  (new shared `clover/methods/classifier_alignment.py`, reused by TUNA).
+  See handoff.md for the full per-method design (MOS/TUNA) agreed in the
+  original P6 planning session.

@@ -17,7 +17,7 @@ locally: the registry-driven revisit-safety gate (all 6 core scenarios) and
 | CODA-Prompt | done (P5) | soft-combined prefix-KV pool | gradient-trained linear |
 | APER-Adapter | done (P6) | one-shot adapter, dual-branch concat | cosine prototype |
 | RanPAC | done (P6) | one-shot adapter, frozen after | random-projection ridge regression |
-| EASE | queued (P6) | growing per-task adapter list | growing-dim cosine + reweight |
+| EASE | done (P6) | growing per-task adapter list | growing-dim cosine + reweight |
 | MOS | queued (P6) | EMA-merged per-task adapter | cosine prototype + CA |
 | TUNA | queued (P6) | EMR-merged per-task adapter | per-task linear (concat) + CA |
 
@@ -76,20 +76,78 @@ Hyperparameters (bench provenance: `bench/configs/methods/ranpac.yaml`):
 | `bottleneck_dim`/adapter-tuning epochs/lr | same as APER-Adapter | same as APER-Adapter | shared backbone mechanism |
 | `use_simplecil` | present, dead config in PILOT (never read by `models/ranpac.py`) | not exposed | not reimplemented -- vestigial upstream |
 
-## Judgment calls / scope simplifications (P6, APER-Adapter + RanPAC)
+### EASE
 
-- **"First experience" generalizes PILOT's "`cur_task == 0`"**: both methods
-  gate adapter training on `exp.task_label == 0` rather than a PILOT-style
-  task counter, since CLOVER experiences are the direct equivalent.
+`clover/backbones/adapter_ease.py:EaseAdapterViT` keeps a growing
+`nn.ModuleList` of per-experience adapter sets -- only the most recent one
+is ever trainable; `grow()` (called from `EASE.before_experience`, not
+`after_experience` -- see "Judgment calls" below) freezes it and allocates
+a fresh one. At evaluation time, the same image passes through *every*
+stored adapter set and the resulting `[CLS]` features concatenate into a
+growing-width tensor (`clover/methods/ease.py`).
+
+The head (`clover/methods/heads.py:EaseHead`) stores `weight` as
+`[num_classes, num_blocks, block_dim]`, tracking each class's "home block"
+(the block it was first introduced in). At inference, cosine similarity is
+computed per block and summed, with non-home blocks down-weighted by
+`alpha` -- PILOT's `EaseCosineLinear.forward_reweight`. New classes get
+real prototype rows in *every* block (old adapters are still available and
+this experience's images are still on hand, so there's no need to
+approximate); already-existing classes' row in the newly added block is
+filled by a cosine-similarity-weighted combination of this round's new
+classes' own rows in that block -- a structurally faithful simplification
+of PILOT's `solve_similarity`/`solve_sim_reset` (their images are gone, so
+a real value can't be recomputed, matching why PILOT itself needs an
+approximation there too).
+
+Per-experience training uses a throwaway proxy head
+(`IncrementalHead(cosine=False)`, sized to the full global head so it
+works directly with `new_class_ce`) over just the current (single)
+adapter's features -- P2's loss policy already makes EASE's real
+`aux_targets`/`ignore_index=-1` patch unnecessary, and matches its
+*effect* precisely: only new-class samples contribute to the loss,
+revisited-class samples in the same batch are skipped.
+
+Hyperparameters (bench provenance: `bench/configs/methods/ease.yaml`):
+
+| Key | PILOT value | CLOVER default | Note |
+|---|---|---|---|
+| `bottleneck_dim` (PILOT: `ffn_num`) | 64 | 8 | scaled down, same as APER-Adapter/RanPAC |
+| `alpha` | 0.1 | 0.1 | unchanged |
+| `beta` (init-PTM block weight) | 0 | not exposed | `use_init_ptm=false` upstream default -- not reimplemented |
+| `use_diagonal` | false | not exposed | vestigial ablation flag upstream |
+| adapter-tuning epochs/lr | init_epochs=20, init_lr=0.025 | 40 / 3e-2 (safety-gate default) | tuned for the tiny random backbone |
+
+## Judgment calls / scope simplifications (P6)
+
+- **"First experience" generalizes PILOT's "`cur_task == 0`"** (APER-Adapter/
+  RanPAC): both methods gate adapter training on `exp.task_label == 0`
+  rather than a PILOT-style task counter, since CLOVER experiences are the
+  direct equivalent.
 - **No dropout in `Adapter`**: PILOT's adapter includes a dropout layer:
   omitted here because `clover/training/trainer.py` constructs
   `PerClassEvaluator` (which calls `.eval()` on the shared classifier
   module graph) once before the training loop even starts, so dropout would
   be permanently disabled for the rest of the run regardless -- adding it
-  would be dead code across the whole framework, not just these two
-  methods.
+  would be dead code across the whole framework, not just these methods.
 - **RanPAC's train/val ridge-selection split uses a locally-seeded
   generator** (`torch.Generator().manual_seed(exp.task_label)`), not the
   run's actual seed -- `TrainContext` doesn't thread the run seed through to
   methods. This only affects which ridge candidate is chosen, not the
   correctness of the closed-form solve.
+- **EASE's `grow()` (freeze-then-allocate) is called from
+  `before_experience`, not `after_experience`**: the Trainer's resume-replay
+  only re-invokes `before_experience` for already-completed experiences, so
+  any structural growth that must exist before `load_state_dict` runs has
+  to live there -- the same reason `IncrementalHead.expand_to`/CODA-Prompt's
+  `pool.start_new_task` are called from `before_experience` too. Putting
+  `grow()` in `after_experience` instead would silently drop the final
+  experience's adapter from `adapter_sets` on a fresh (non-resumed) run,
+  since no `before_experience(N)` call ever follows the last experience
+  `N-1`.
+- **EASE's proxy head is full-global-width** (like `AdapterMethodBase`'s
+  `_train_head`), not locally indexed to just this round's new classes
+  (PILOT's `proxy_fc` is locally indexed) -- avoids a second
+  targets-remapping mechanism alongside `new_class_ce`'s existing
+  set-membership masks; functionally equivalent since only the new-class
+  columns/rows ever receive gradient either way.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import List
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -142,3 +144,88 @@ class RandomProjectionRidgeHead(nn.Module):
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         phi = self.project(features)
         return F.linear(phi, self.weight)
+
+
+class EaseHead(nn.Module):
+    """EASE's growing-dim head (SPEC §6.5): ``weight`` is ``[num_classes,
+    num_blocks, block_dim]`` -- one row per class, spanning every adapter
+    block (one per experience) introduced so far. Each class has a "home
+    block" (the block index it was first introduced in); at inference,
+    cosine similarity is computed per block and summed, with non-home
+    blocks down-weighted by ``alpha`` -- PILOT's own reweighting scheme
+    (``EaseCosineLinear.forward_reweight``).
+
+    A class's *non-home*-block rows can't be recomputed from real data once
+    that class's images are gone (no exemplar memory in this framework), so
+    a newly added block's rows for already-existing classes are filled by a
+    cosine-similarity-weighted combination of the newly-introduced classes'
+    own rows in that same block -- a structurally faithful simplification
+    of PILOT's ``solve_similarity``/``solve_sim_reset``. The caller (
+    ``clover/methods/ease.py``) is responsible for this interpolation;
+    ``EaseHead`` itself only owns storage/growth/the reweighted forward
+    pass.
+    """
+
+    def __init__(self, block_dim: int, alpha: float = 0.1, scale: float = 10.0) -> None:
+        super().__init__()
+        self.block_dim = block_dim
+        self.alpha = alpha
+        self.weight = nn.Parameter(torch.zeros(0, 0, block_dim))
+        self.scale = nn.Parameter(torch.tensor(float(scale)))
+        self.home_block: List[int] = []
+
+    @property
+    def num_classes(self) -> int:
+        return self.weight.shape[0]
+
+    @property
+    def num_blocks(self) -> int:
+        return self.weight.shape[1]
+
+    def add_block(self) -> None:
+        """Grow the block dimension by one, zero-initialized (filled in by
+        the caller via ``set_block_row``). No-op guard isn't needed here --
+        the caller (``EASE.before_experience``) calls this exactly once per
+        experience, matching the replay-safe growth pattern every other
+        per-experience-growing head/pool in this codebase uses."""
+        old = self.weight.data
+        new = torch.zeros(
+            old.shape[0], old.shape[1] + 1, self.block_dim, dtype=old.dtype, device=old.device
+        )
+        new[:, : old.shape[1], :] = old
+        self.weight = nn.Parameter(new)
+
+    def expand_classes(self, new_num_classes: int, home_block: int) -> None:
+        """Grow the class dimension to *new_num_classes*, recording
+        *home_block* for each newly added class row. No-op if already at
+        least that wide."""
+        if new_num_classes <= self.num_classes:
+            return
+        old = self.weight.data
+        new = torch.zeros(
+            new_num_classes, old.shape[1], self.block_dim, dtype=old.dtype, device=old.device
+        )
+        new[: old.shape[0]] = old
+        self.weight = nn.Parameter(new)
+        self.home_block.extend([home_block] * (new_num_classes - len(self.home_block)))
+
+    def set_block_row(self, class_id: int, block_id: int, vector: torch.Tensor) -> None:
+        with torch.no_grad():
+            self.weight.data[class_id, block_id] = vector
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """``features``: ``[batch, num_blocks, block_dim]`` (one slice per
+        stored adapter, e.g. ``EaseAdapterViT.forward``'s output)."""
+        features_n = F.normalize(features, dim=-1)
+        weight_n = F.normalize(self.weight, dim=-1)  # [C, N, D]
+        similarity = torch.einsum("bnd,cnd->bcn", features_n, weight_n)  # [batch, C, N]
+
+        home = torch.tensor(self.home_block, dtype=torch.long, device=features.device)  # [C]
+        block_idx = torch.arange(self.num_blocks, device=features.device)  # [N]
+        is_home = home.unsqueeze(1) == block_idx.unsqueeze(0)  # [C, N]
+        one = torch.tensor(1.0, device=features.device)
+        alpha = torch.tensor(self.alpha, device=features.device)
+        weights = torch.where(is_home, one, alpha)  # [C, N]
+
+        logits = (similarity * weights.unsqueeze(0)).sum(dim=-1)  # [batch, C]
+        return self.scale * logits
