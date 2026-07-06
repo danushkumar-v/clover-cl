@@ -15,7 +15,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - [x] **P3 — CLMethod + Trainer + SimpleCIL** (SPEC §6.1–6.2): CLMethod ABC, TrainContext, incremental heads, core Trainer (seeding, loop, checkpoints/resume, status.json, per-class evaluator hookup); SimpleCIL end-to-end. DONE: SimpleCIL passes safety gate + smoke on CPU; interrupted-run resume test green; CIFAR-100 disjoint sanity run queued/verified on cluster ≈ published range (record in docs/methods.md). **CIFAR-100-on-cluster leg deferred — see Log.**
 - [x] **P4 — Config + CLI + cluster workflow** (SPEC §9, §11): typed YAML schemas with unknown-key rejection and layered defaults, `config_resolved.yaml`, run-dir artifacts; CLI `run` / `smoke` / `inspect` / `preflight`; smoke profile; `scripts/slurm_run.sh`. DONE: typo'd config fails pre-data naming the key; `clover run <cfg> --profile smoke` and `clover smoke` green on GPU-less CPU in <10 min; sbatch template submits and resumes on Snellius with only `#SBATCH` placeholders filled. **Actual Snellius submission unverified — see Log.**
 - [x] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method. **CIFAR-100-vs-published leg deferred — see Log.**
-- [ ] **P6 — Remaining methods** (SPEC §6.5): APER-Adapter, EASE, RanPAC, MOS, TUNA (adapter wrappers as needed); hyperparameter defaults carried from bench configs with provenance notes. DONE: each passes safety gate + smoke + disjoint CIFAR-100 sanity vs. published range; comparison table in docs/methods.md covers all 9.
+- [x] **P6 — Remaining methods** (SPEC §6.5): APER-Adapter, EASE, RanPAC, MOS, TUNA (adapter wrappers as needed); hyperparameter defaults carried from bench configs with provenance notes. DONE: each passes safety gate + smoke + disjoint CIFAR-100 sanity vs. published range; comparison table in docs/methods.md covers all 9. **CIFAR-100-vs-published leg deferred for all 5 (same reason as P3/P4/P5) — see Log.**
 - [ ] **P7 — Metrics + reporting + matrix** (SPEC §10): per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) + CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware) metrics ported with fixture tests; `clover report`; `run-matrix` orchestrator (resume/retry/stale/GPU-pool). DONE: hand-computed metric fixtures green; two-method synthetic demo report renders in CI; matrix resume test green.
 - [ ] **P8 — Datasets + extras + docs** (SPEC §7, §8, §13): CUB-200, ImageNet-R/A, OmniBenchmark, VTAB wrappers + staging docs; `image_folder` config-only dataset; scenario extras as capacity allows; docs/concepts.md, docs/extending.md (method/dataset/scenario/backbone worked examples). DONE: built-in metadata smoke tests green; a tutorial-followed custom dataset runs a full smoke benchmark without touching core.
 - [ ] **P9 — Release candidate** (SPEC §13–§14): docs/MIGRATION.md (legacy API → v2 configs), README (quickstart, smoke→SLURM workflow, scenario table, results, citations + no-copied-code attribution note); full matrix on cluster; tag RC. DONE: full 9-method × 6-scenario matrix reproduced on Snellius from shipped configs; README workflow verified end-to-end; `main` preserved as `v1` branch.
@@ -543,3 +543,57 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   concatenated, unfrozen; reuses `classifier_alignment.py`. Once TUNA
   lands: tick P6's box, and update `docs/methods.md`'s comparison table to
   mark all 9 methods done.
+
+- **2026-07-06, P6 complete: TUNA done, all 9 methods ticked.**
+  `clover/backbones/adapter_tuna.py:TunaAdapterViT` grows a fresh adapter
+  per experience like EASE (only the most recent trainable), but combines
+  every stored (frozen) adapter via **EMR-merge** (`_emr_merge`: elect a
+  per-parameter sign by majority vote, keep the max-magnitude value among
+  agreeing task tensors, rescale to preserve the mean task tensor's
+  average magnitude) into a single consensus adapter used directly for
+  evaluation. Registry-driven safety gate (all 6 scenarios) and
+  `clover smoke` both green at the *existing* tuned hyperparameters, no
+  retuning needed. Full suite: 337 tests (54 gate cases: 9 methods × 6
+  scenarios).
+- **Deviated from the "per-task `nn.Linear` heads, concatenated" plan
+  stated when this phase was queued**: discovered while designing this
+  that PILOT's `TunaLinear` (separate per-task heads) is an
+  implementation detail for isolating gradient to the newest task's own
+  output columns during training -- the framework's existing
+  `masked_logits` primitive (already used by `new_class_ce`) gives that
+  same isolation for free over a single plain global-width
+  `IncrementalHead(cosine=True)`, with no separate per-task objects and no
+  targets-remapping needed. Confirmed PILOT's own default margin (`m=0.0`)
+  makes the resulting angular loss numerically identical to
+  `new_class_ce` -- added `angular_margin_ce` to `clover/methods/
+  losses.py` anyway (not a bare alias) so a nonzero margin is genuinely
+  supported, not just documented as unsupported. No closed-form
+  prototype-overwrite step exists for TUNA's head (unlike MOS/
+  APER-Adapter) -- purely gradient-trained via the angular loss, matching
+  what the research found for PILOT's own TUNA (no `replace_fc`-equivalent
+  mentioned for it).
+- **`recompute_merge()`'s timing intentionally differs from `grow()`'s**:
+  `grow()` (structural -- append a fresh trainable adapter, freeze the
+  previous one) lives in `before_experience`, same resume-safety reason as
+  EASE/MOS. `recompute_merge()` (value-only -- merged_adapter's shape
+  never changes) lives in `train_experience`, right after that round's
+  training finishes, matching PILOT's own cadence (merge right after a
+  task's adapter is appended, so evaluating that same round already
+  reflects its own contribution, not a one-round-stale merge). Confirmed
+  this is safe for resume precisely because it's a value update, not a
+  structural one -- `load_state_dict` overwrites whatever values existed
+  regardless of when in the live run's flow they were last computed
+  (same reasoning as EASE's/MOS's prototype and CA updates, which also
+  live in `train_experience`).
+- **Per-class CA stats computed via the *merged* adapter's features, not
+  `forward_current`'s** -- unlike MOS (whose evaluation ensembles every
+  adapter including the current one), TUNA's evaluation uses *only* the
+  merged adapter, so CA has to align the head against that same feature
+  space specifically, not the still-training current adapter's.
+- CIFAR-100-vs-published-accuracy verification remains deferred for all 5
+  P6 methods, same reason as every prior phase: no real CIFAR-100 dataset
+  yet (P7/P8) and no GPU/Snellius access this session. Everything locally
+  verifiable is done and green: registry-driven safety gate (54 cases, 9
+  methods × 6 scenarios), `clover smoke` (9/9 methods OK), and per-method
+  isolated unit tests for all 5 adapter-family methods. `docs/methods.md`
+  now covers all 9 methods with hyperparameter provenance tables.

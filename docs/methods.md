@@ -19,7 +19,7 @@ locally: the registry-driven revisit-safety gate (all 6 core scenarios) and
 | RanPAC | done (P6) | one-shot adapter, frozen after | random-projection ridge regression |
 | EASE | done (P6) | growing per-task adapter list | growing-dim cosine + reweight |
 | MOS | done (P6) | EMA-merged, one continuously-trained adapter | cosine prototype + CA |
-| TUNA | queued (P6) | EMR-merged per-task adapter | per-task linear (concat) + CA |
+| TUNA | done (P6) | EMR-merged per-task adapter | angular-margin-trained cosine + CA |
 
 ## Adapter family (P6)
 
@@ -175,6 +175,64 @@ Hyperparameters (bench provenance: `bench/configs/methods/mos.yaml`):
 | two-param-group LR split (adapter vs. head at 10x lower LR) | present | not reimplemented | single shared LR for adapter+head; a scope simplification, not yet revisited |
 | `ensemble`/entropy self-refinement | true / present | plain logit average | see "Simplified out" above |
 
+### TUNA
+
+Like EASE, `clover/backbones/adapter_tuna.py:TunaAdapterViT` grows a fresh
+adapter per experience (only the most recent one trainable); unlike EASE's
+concatenation or MOS's continuous EMA, TUNA combines every stored
+experience's *frozen* adapter into a single consensus adapter via
+**EMR-merge** (Exclusive Mask and Rescale, confirmed via read-only research
+on `models/tuna.py`/`backbone/vit_tuna.py`'s `TaskVector`/`emr_merge`):
+per parameter tensor, elect a sign by majority vote across every stored
+task's adapter, keep the max-magnitude value among the task tensors
+agreeing with that sign (zeroing the rest), then rescale so the merged
+tensor's average magnitude matches the mean task tensor's -- otherwise
+electing the max at every position would systematically inflate the
+merged tensor's scale. `recompute_merge()` runs at the end of
+`train_experience` (a value-only update, unlike the structural adapter
+-list growth in `before_experience`) so evaluation of the *same* round
+already reflects its own just-finished training, matching PILOT's own
+cadence (merge runs right after a task's adapter is appended, not deferred
+to the next task).
+
+The classifier uses the merged adapter **directly** for evaluation
+(`clover/methods/tuna.py:_Classifier`) -- PILOT's per-sample entropy-based
+adapter routing (predict with every stored adapter, pick the
+lowest-entropy one, ensemble with the merged "general" prediction) is
+simplified out, agreed before implementing: this is more faithful to
+"TUNA" than skipping the merge itself would be, and simpler than
+reimplementing per-sample routing.
+
+The head is a plain global-width `IncrementalHead(cosine=True)` (not
+PILOT's `TunaLinear` -- a list of separate per-task `nn.Linear` objects,
+concatenated), trained via a new CosFace-style angular-margin loss
+(`clover/methods/losses.py:angular_margin_ce`, restricted to new-class
+samples/columns via the same `masked_logits` primitive `new_class_ce`
+uses). PILOT's per-task-heads design is an implementation detail for
+isolating gradient to the newest task's own columns during training --
+`angular_margin_ce`'s masking already gives that for free, so no separate
+per-task `nn.Linear` list is needed. PILOT's own default margin (`m=0.0`)
+makes `angular_margin_ce` numerically identical to `new_class_ce`; TUNA
+still gets its own loss function (not a bare reuse) so a nonzero margin
+is genuinely supported. No closed-form prototype-overwrite step exists for
+TUNA (unlike MOS/APER-Adapter) -- the head is purely gradient-trained via
+the angular loss, matching what the research found for PILOT's own TUNA.
+Reuses `clover/methods/classifier_alignment.py` (built for MOS) as-is;
+per-class stats are computed via the *merged* adapter's features (not the
+still-training current one), matching what evaluation will actually see.
+
+Hyperparameters (bench provenance: `bench/configs/methods/tuna.yaml` ≈
+PILOT `exps/tuna_cifar.json`):
+
+| Key | PILOT value | CLOVER default | Note |
+|---|---|---|---|
+| `bottleneck_dim` | 16 (PILOT hardcodes this in `init_adapters()`, ignoring its own `r` config key entirely) | 8 | scaled down; PILOT's `r: 16` hyperparameter is dead config upstream, not reimplemented as a separate knob |
+| `margin` (PILOT: `m`) | 0.0 | 0.0 | unchanged -- PILOT's own default disables the angular margin |
+| `scale` (PILOT: cosface `s`) | 20.0 | not a separate knob | folded into whatever scale `IncrementalHead(cosine=True)`'s own learned scale produces -- argmax/accuracy is scale-invariant regardless (see `angular_margin_ce`'s docstring) |
+| `use_orth` | false | not exposed | disabled by PILOT's own default; not reimplemented |
+| `decay` | false | not exposed | disabled by PILOT's own default (and would misbehave under CLOVER's uneven task sizes if ever turned on, per the original research); not reimplemented |
+| `crct_epochs`/`ca_lr` | 30 / 0.005 | 10 (constructor default) / 5e-3 | same reduction as MOS, for the tiny synthetic setup |
+
 ## Judgment calls / scope simplifications (P6)
 
 - **"First experience" generalizes PILOT's "`cur_task == 0`"** (APER-Adapter/
@@ -208,3 +266,42 @@ Hyperparameters (bench provenance: `bench/configs/methods/mos.yaml`):
   targets-remapping mechanism alongside `new_class_ce`'s existing
   set-membership masks; functionally equivalent since only the new-class
   columns/rows ever receive gradient either way.
+- **`torch.distributions.MultivariateNormal.sample()` draws from the
+  global RNG and doesn't accept an explicit generator** -- caught while
+  designing MOS's classifier alignment, before it became a resume-safety
+  bug (same class of issue P3's DataLoader-RNG fix addressed: CA runs
+  inside `train_experience`, which resume-replay skips for completed
+  experiences). `classifier_alignment.py` samples by hand instead
+  (Cholesky decomposition + `torch.randn(..., generator=...)`), seeded
+  from `exp.task_label`.
+- **TUNA's merge-recomputation timing differs from EASE's/MOS's
+  structural-growth timing on purpose**: `TunaAdapterViT.grow()` (append a
+  fresh trainable adapter, freeze the previous one) is structural and
+  lives in `before_experience`, same as EASE/MOS; but
+  `recompute_merge()` (recompute `merged_adapter`'s *values* via EMR-merge)
+  lives in `train_experience`, right after that round's training finishes
+  -- it's a value-only update (the merged adapter's shape never changes),
+  so it doesn't have the same resume-replay constraint structural growth
+  does, and doing it here (rather than deferring to the next round's
+  `before_experience`) matches PILOT's own cadence: evaluating round N
+  already reflects round N's own contribution to the merge, not a
+  one-round-stale version of it.
+- **TUNA's per-class CA stats are computed via the *merged* adapter's
+  features, not `forward_current`'s** (the still-training current
+  adapter) -- unlike MOS (whose evaluation ensembles every adapter
+  including the current one, so `forward_current` is a reasonable proxy
+  for "the current era"), TUNA's evaluation uses *only* the merged
+  adapter, so aligning the head against any other feature space would
+  train it for a distribution it's never actually evaluated against.
+- **TUNA's head reuses `IncrementalHead(cosine=True)` directly rather than
+  reimplementing PILOT's `TunaLinear`** (a list of separate per-task
+  `nn.Linear` objects, concatenated, never frozen) -- confirmed while
+  designing this that `TunaLinear`'s per-task-heads design is an
+  implementation detail for isolating gradient to the newest task's own
+  output columns during training, a property `angular_margin_ce`'s
+  `masked_logits`-based restriction already provides without needing
+  separate per-task objects. Also confirmed PILOT's own default margin
+  (`m=0.0`) makes the angular loss numerically identical to plain
+  `new_class_ce` -- `angular_margin_ce` still exists as its own function
+  (not a bare alias) so a nonzero margin is genuinely supported, not just
+  documented as unsupported.

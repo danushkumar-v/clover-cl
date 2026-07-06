@@ -23,6 +23,7 @@ from clover.backbones import (  # noqa: E402
     adapter,
     adapter_ease,
     adapter_mos,
+    adapter_tuna,
     coda_prompt,
     dual_prompt,
     prompt_pool,
@@ -39,4 +40,5 @@ __all__ += [
     "adapter",
     "adapter_ease",
     "adapter_mos",
+    "adapter_tuna",
 ]

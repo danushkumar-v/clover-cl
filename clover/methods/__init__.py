@@ -2,8 +2,7 @@
 
 ``simplecil`` (P3) and the full prompt trio -- ``l2p``, ``dualprompt``,
 ``coda_prompt`` (P5) -- are registered. The adapter family (APER-Adapter,
-EASE, RanPAC, MOS, TUNA) lands in P6; ``aper_adapter``/``ranpac``/``ease``/
-``mos`` are done, ``tuna`` is queued.
+EASE, RanPAC, MOS, TUNA, P6) is now complete: all 9 methods registered.
 """
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ from clover.methods import (  # noqa: E402
     mos,
     ranpac,
     simple_cil,
+    tuna,
 )
 
 __all__ += [
@@ -40,4 +40,5 @@ __all__ += [
     "ranpac",
     "ease",
     "mos",
+    "tuna",
 ]

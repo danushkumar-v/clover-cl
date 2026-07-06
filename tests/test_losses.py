@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from clover.core.experience import LabelSpaceView
-from clover.methods.losses import masked_logits, new_class_ce, seen_class_ce
+from clover.methods.losses import angular_margin_ce, masked_logits, new_class_ce, seen_class_ce
 
 
 def _view(new_classes, seen_classes):
@@ -89,3 +89,36 @@ def test_masked_logits_rejects_unknown_kind():
     view = _view(new_classes=[0], seen_classes=[])
     with pytest.raises(ValueError, match="kind must be"):
         masked_logits(torch.randn(2, 1), torch.tensor([0, 0]), view, "bogus")
+
+
+def test_angular_margin_ce_with_zero_margin_matches_new_class_ce():
+    view = _view(new_classes=[2, 3], seen_classes=[0, 1])
+    torch.manual_seed(0)
+    logits = torch.randn(4, 4)
+    targets = torch.tensor([0, 2, 1, 3])
+
+    assert torch.allclose(angular_margin_ce(logits, targets, view), new_class_ce(logits, targets, view))
+
+
+def test_angular_margin_ce_nonzero_margin_increases_loss_on_new_samples():
+    view = _view(new_classes=[2, 3], seen_classes=[0, 1])
+    torch.manual_seed(0)
+    logits = torch.randn(4, 4)
+    targets = torch.tensor([0, 2, 1, 3])
+
+    no_margin = angular_margin_ce(logits, targets, view, margin=0.0)
+    with_margin = angular_margin_ce(logits, targets, view, margin=0.5)
+    # Subtracting margin from the true class's own logit only ever makes it
+    # harder to predict correctly -- CE can't decrease from this.
+    assert with_margin.item() >= no_margin.item()
+
+
+def test_angular_margin_ce_is_zero_and_graph_connected_when_no_new_samples():
+    view = _view(new_classes=[2, 3], seen_classes=[0, 1])
+    logits = torch.randn(4, 4, requires_grad=True)
+    targets = torch.tensor([0, 1, 0, 1])  # no new-class samples at all
+
+    loss = angular_margin_ce(logits, targets, view, margin=0.3)
+    assert loss.item() == 0.0
+    loss.backward()
+    assert logits.grad is not None

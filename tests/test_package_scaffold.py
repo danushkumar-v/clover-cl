@@ -16,7 +16,7 @@ def test_package_imports() -> None:
     assert clover.__version__ == "2.0.0.dev0"
 
 
-def test_methods_registry_has_the_expected_p3_p6_methods() -> None:
+def test_methods_registry_has_all_9_methods() -> None:
     assert set(list_methods()) == {
         "simplecil",
         "l2p",
@@ -26,6 +26,7 @@ def test_methods_registry_has_the_expected_p3_p6_methods() -> None:
         "ranpac",
         "ease",
         "mos",
+        "tuna",
     }
 
 
@@ -54,6 +55,7 @@ def test_backbone_registry_has_the_expected_p2_p6_builtins() -> None:
         "vit_adapter",
         "vit_adapter_ease",
         "vit_adapter_mos",
+        "vit_adapter_tuna",
     }
 
 

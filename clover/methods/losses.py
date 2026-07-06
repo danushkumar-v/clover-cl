@@ -76,3 +76,32 @@ def seen_class_ce(logits: torch.Tensor, targets: torch.Tensor, view: LabelSpaceV
     """CE over all seen classes (methods that legitimately train on revisits,
     e.g. drift anchors)."""
     return _masked_ce(logits, targets, view, "seen")
+
+
+def angular_margin_ce(
+    logits: torch.Tensor, targets: torch.Tensor, view: LabelSpaceView, margin: float = 0.0
+) -> torch.Tensor:
+    """CosFace-style angular-margin CE (TUNA, SPEC §6.5): CE restricted to
+    new-class samples AND new-class logit columns (built on the same
+    ``masked_logits`` primitive as ``new_class_ce`` -- no separate
+    ``targets - known_classes`` index arithmetic), with ``margin``
+    subtracted from the true-class logit before the softmax.
+
+    PILOT's own default (``m=0.0``) makes this identical to
+    ``new_class_ce``; ``margin > 0`` pushes the true class's logit down
+    relative to the others, encouraging a wider decision margin. Assumes
+    ``logits`` are already suitably-scaled cosine similarities (e.g. from
+    ``IncrementalHead(cosine=True)``) -- ``margin`` is in the same units as
+    whatever scale the head applies, not a separately hard-coded CosFace
+    scale, since argmax/accuracy is scale-invariant regardless of which
+    positive scalar produced ``logits``.
+    """
+    masked, sample_mask = masked_logits(logits, targets, view, "new")
+    if not sample_mask.any():
+        return logits.sum() * 0.0
+    cos_theta = masked[sample_mask]
+    sample_targets = targets[sample_mask]
+    if margin != 0.0:
+        one_hot = F.one_hot(sample_targets, num_classes=logits.shape[-1]).bool()
+        cos_theta = torch.where(one_hot, cos_theta - margin, cos_theta)
+    return F.cross_entropy(cos_theta, sample_targets)

@@ -18,6 +18,7 @@ def test_smoke_runs_every_registered_method_successfully(capsys):
     assert "ranpac OK" in out
     assert "ease OK" in out
     assert "mos OK" in out
+    assert "tuna OK" in out
 
 
 def test_smoke_reports_failure_and_nonzero_exit_for_a_broken_method(monkeypatch, capsys):
