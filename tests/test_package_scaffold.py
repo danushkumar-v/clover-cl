@@ -30,7 +30,7 @@ def test_methods_registry_has_all_9_methods() -> None:
     }
 
 
-def test_scenario_registry_has_the_6_core_scenarios_since_p1() -> None:
+def test_scenario_registry_has_the_expected_p1_p8_scenarios() -> None:
     assert set(list_scenarios()) == {
         "disjoint_baseline",
         "exact_replay",
@@ -38,6 +38,7 @@ def test_scenario_registry_has_the_6_core_scenarios_since_p1() -> None:
         "long_range_revisit",
         "mid_range_revisit",
         "cumulative_drift",
+        "distribution_shift",
     }
 
 
@@ -50,6 +51,7 @@ def test_dataset_registry_has_the_expected_p2_p8_builtins() -> None:
         "imagenet_a",
         "omnibenchmark",
         "vtab",
+        "image_folder",
     }
 
 

@@ -102,6 +102,11 @@ class TrainingSection:
         }
 
 
+#: Keys allowed inside an inline ``dataset: {type: ..., root: ..., num_classes: ...}``
+#: mapping (SPEC §7's config-only path, e.g. for ``image_folder``).
+_INLINE_DATASET_KEYS = frozenset({"type", "root", "num_classes"})
+
+
 @dataclass
 class StreamSection:
     dataset: str
@@ -114,6 +119,11 @@ class StreamSection:
     shuffle_seed: int = 1993
     task_size: str = "fixed"
     data_root: str = "./data"
+    #: Only set for config-only datasets (SPEC §7: ``dataset: {type:
+    #: image_folder, root: ..., num_classes: ...}``) whose class count
+    #: isn't a hardcoded registry constant -- ``None`` for every named
+    #: built-in, which already knows its own ``num_classes``.
+    dataset_num_classes: Optional[int] = None
 
     _ALLOWED_KEYS = frozenset(
         {
@@ -127,6 +137,7 @@ class StreamSection:
             "shuffle_seed",
             "task_size",
             "data_root",
+            "dataset_num_classes",
         }
     )
 
@@ -154,8 +165,32 @@ class StreamSection:
             raise ValueError("stream config is missing required key 'init_cls'.")
         if "increment" not in raw:
             raise ValueError("stream config is missing required key 'increment'.")
+
+        raw_dataset = raw["dataset"]
+        data_root = str(raw.get("data_root", "./data"))
+        dataset_num_classes: Optional[int] = None
+        if isinstance(raw_dataset, dict):
+            reject_unknown_keys(raw_dataset, _INLINE_DATASET_KEYS, "inline dataset config")
+            if "type" not in raw_dataset:
+                raise ValueError(
+                    "inline dataset config is missing required key 'type' "
+                    "(e.g. {type: image_folder, root: ..., num_classes: ...})."
+                )
+            dataset_name = str(raw_dataset["type"])
+            if "root" in raw_dataset:
+                data_root = str(raw_dataset["root"])
+            if "num_classes" in raw_dataset:
+                dataset_num_classes = int(raw_dataset["num_classes"])
+        else:
+            dataset_name = str(raw_dataset)
+            # Round-tripping a resolved config: StreamSpec.to_dict() writes
+            # dataset_num_classes as a plain top-level key (the inline
+            # {type/root/num_classes} mapping is already gone by then).
+            if raw.get("dataset_num_classes") is not None:
+                dataset_num_classes = int(raw["dataset_num_classes"])
+
         section = cls(
-            dataset=str(raw["dataset"]),
+            dataset=dataset_name,
             init_cls=int(raw["init_cls"]),
             increment=int(raw["increment"]),
             scenario=raw.get("scenario"),
@@ -164,7 +199,8 @@ class StreamSection:
             stream_seed=int(raw.get("stream_seed", 42)),
             shuffle_seed=int(raw.get("shuffle_seed", 1993)),
             task_size=raw.get("task_size", "fixed"),
-            data_root=str(raw.get("data_root", "./data")),
+            data_root=data_root,
+            dataset_num_classes=dataset_num_classes,
         )
         section.validate()
         return section
@@ -181,6 +217,7 @@ class StreamSection:
             "shuffle_seed": self.shuffle_seed,
             "task_size": self.task_size,
             "data_root": self.data_root,
+            "dataset_num_classes": self.dataset_num_classes,
         }
 
 

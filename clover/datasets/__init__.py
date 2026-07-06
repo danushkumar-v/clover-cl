@@ -1,7 +1,9 @@
 """Dataset plugins: CLDataset ABC (SPEC §7).
 
 ``synthetic`` (P2, SPEC §12.2) plus the 6 real built-ins (P8): CIFAR-100,
-CUB-200, ImageNet-R/A, OmniBenchmark, VTAB.
+CUB-200, ImageNet-R/A, OmniBenchmark, VTAB. Plus ``image_folder``, a
+config-only dataset for arbitrary user data (SPEC §7's ``dataset: {type:
+image_folder, root: ..., num_classes: ...}`` path).
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ __all__ = ["register_dataset", "get_dataset", "list_datasets"]
 from clover.datasets import (  # noqa: E402
     cifar100,
     cub200,
+    image_folder_config,
     imagenet_a,
     imagenet_r,
     omnibench,
@@ -28,4 +31,13 @@ from clover.datasets import (  # noqa: E402
     vtab,
 )
 
-__all__ += ["synthetic", "cifar100", "cub200", "imagenet_r", "imagenet_a", "omnibench", "vtab"]
+__all__ += [
+    "synthetic",
+    "cifar100",
+    "cub200",
+    "imagenet_r",
+    "imagenet_a",
+    "omnibench",
+    "vtab",
+    "image_folder_config",
+]

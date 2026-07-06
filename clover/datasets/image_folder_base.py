@@ -14,6 +14,7 @@ since all five concrete uses already existed and matched exactly.
 
 from __future__ import annotations
 
+import os
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -54,22 +55,35 @@ class ImageFolderCLDataset(CLDataset):
     use_path: bool = True
     input_size: int = 224
 
-    #: Set by each subclass.
+    #: Set by each subclass. ``dataset_dir`` may be ``""`` (config-only
+    #: datasets like ``image_folder``, whose root *is* the split parent --
+    #: no named subdirectory nesting). ``_num_classes`` is deliberately
+    #: *not* a ``ClassVar`` -- the 5 named built-ins set it once at class
+    #: level (a fixed constant), but ``image_folder`` sets it per instance
+    #: (the count comes from config, not a hardcoded registry value), and
+    #: mypy rejects instance assignment to a `ClassVar`-annotated name.
     dataset_dir: ClassVar[str]
-    _num_classes: ClassVar[int]
-    download_url: ClassVar[str]
+    _num_classes: int
+    download_url: ClassVar[str] = ""
+
+    def _missing_data_hint(self) -> str:
+        """Staging guidance for the ``FileNotFoundError`` message --
+        overridden by config-only subclasses that have no fixed download
+        URL to point at."""
+        return f"Download from {self.download_url}."
 
     def __init__(self, root: str = "./data", train: bool = True, transform: Optional[Any] = None) -> None:
         super().__init__(root, train, transform)
         split = "train" if train else "test"
-        data_dir = f"{root}/{self.dataset_dir}/{split}"
+        parts = [root] + ([self.dataset_dir] if self.dataset_dir else []) + [split]
+        data_dir = os.path.join(*parts)
         try:
             image_folder = datasets.ImageFolder(data_dir)
         except FileNotFoundError:
             raise FileNotFoundError(
-                f"{type(self).__name__} data not found at {data_dir!r}. Download "
-                f"from {self.download_url} and extract so that {data_dir!r} exists "
-                "(see docs/concepts.md for dataset staging)."
+                f"{type(self).__name__} data not found at {data_dir!r}. "
+                f"{self._missing_data_hint()} Expected one subdirectory per "
+                f"class under {data_dir!r} (see docs/concepts.md for dataset staging)."
             ) from None
         self._paths = np.array([p for p, _ in image_folder.imgs])
         self._targets = np.array([t for _, t in image_folder.imgs])

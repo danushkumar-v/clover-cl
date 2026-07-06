@@ -11,7 +11,9 @@ import sys
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
+
+from torchvision import transforms
 
 from clover.config import MatrixSection, ResolvedConfig, load_yaml, resolve_config
 from clover.core.planner import resolve as resolve_plan
@@ -27,9 +29,27 @@ _SMOKE_METHOD_INIT_CLS = 4
 _SMOKE_METHOD_INCREMENT = 4
 
 
-def _dataset_info(dataset_name: str) -> DatasetInfo:
-    dataset_cls = get_dataset(dataset_name)
-    return DatasetInfo(dataset_name, dataset_cls().num_classes)
+def _dataset_info(
+    dataset_name: str, root: str = "./data", num_classes: Optional[int] = None
+) -> DatasetInfo:
+    if num_classes is None:
+        # Config-only datasets (SPEC §7: image_folder) can't be
+        # constructed with zero args at all -- callers with a declared
+        # count pass it directly instead of relying on this fallback.
+        dataset_cls = get_dataset(dataset_name)
+        num_classes = dataset_cls(root=root).num_classes
+    return DatasetInfo(dataset_name, num_classes)
+
+
+def _apply_default_transforms(dataset: Any) -> None:
+    # Datasets declare their own transform presets (SPEC §7) but never
+    # apply them -- v1's DataManager did this composition centrally
+    # (train_trsf/test_trsf + common_trsf); v2 has no equivalent yet, so
+    # every real (non-synthetic) dataset silently trained on raw PIL
+    # images until this was wired up here.
+    trsf = list(dataset.train_trsf if dataset.train else dataset.test_trsf) + list(dataset.common_trsf)
+    if trsf:
+        dataset.transform = transforms.Compose(trsf)
 
 
 def _run_dir_for(resolved: ResolvedConfig, config_path: str) -> str:
@@ -68,8 +88,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     resolved.save(os.path.join(run_dir, "config_resolved.yaml"))
 
     dataset_cls = get_dataset(resolved.stream_spec.dataset)
-    train_dataset = dataset_cls(train=True)
-    test_dataset = dataset_cls(train=False)
+    dataset_kwargs: dict[str, Any] = {"root": resolved.stream_spec.data_root}
+    if resolved.stream_spec.dataset_num_classes is not None:
+        dataset_kwargs["num_classes"] = resolved.stream_spec.dataset_num_classes
+    train_dataset = dataset_cls(train=True, **dataset_kwargs)
+    test_dataset = dataset_cls(train=False, **dataset_kwargs)
+    _apply_default_transforms(train_dataset)
+    _apply_default_transforms(test_dataset)
     info = DatasetInfo(resolved.stream_spec.dataset, train_dataset.num_classes)
 
     benchmark = build_benchmark(
@@ -95,6 +120,8 @@ def _smoke_check_method(method_name: str) -> None:
     dataset_cls = get_dataset("synthetic")
     train_dataset = dataset_cls(train=True)
     test_dataset = dataset_cls(train=False)
+    _apply_default_transforms(train_dataset)
+    _apply_default_transforms(test_dataset)
     benchmark = build_benchmark(
         spec, info, train_dataset.get_class_to_indices(), test_dataset.get_class_to_indices()
     )
@@ -131,7 +158,11 @@ def cmd_smoke(args: argparse.Namespace) -> int:
 def cmd_inspect(args: argparse.Namespace) -> int:
     raw = load_yaml(args.config)
     resolved = resolve_config(raw)
-    info = _dataset_info(resolved.stream_spec.dataset)
+    info = _dataset_info(
+        resolved.stream_spec.dataset,
+        root=resolved.stream_spec.data_root,
+        num_classes=resolved.stream_spec.dataset_num_classes,
+    )
     plan = resolve_plan(resolved.stream_spec, info)
 
     print(f"dataset: {resolved.stream_spec.dataset} ({info.num_classes} classes)")
@@ -148,7 +179,11 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     raw = load_yaml(args.config)
     resolved = resolve_config(raw)
     get_method(resolved.method_name)  # raises if unregistered
-    info = _dataset_info(resolved.stream_spec.dataset)
+    info = _dataset_info(
+        resolved.stream_spec.dataset,
+        root=resolved.stream_spec.data_root,
+        num_classes=resolved.stream_spec.dataset_num_classes,
+    )
     resolve_plan(resolved.stream_spec, info)  # raises on infeasible placement/budget overflow
     print("preflight OK")
     return 0

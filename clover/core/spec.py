@@ -147,6 +147,9 @@ class StreamSpec:
     shuffle_seed: int = 1993
     stream_seed: int = 42
     data_root: str = "./data"
+    #: Only set for config-only datasets (SPEC §7: ``image_folder``) whose
+    #: class count isn't a hardcoded registry constant.
+    dataset_num_classes: int | None = None
 
     _ALLOWED_KEYS = frozenset(
         {
@@ -158,6 +161,7 @@ class StreamSpec:
             "shuffle_seed",
             "stream_seed",
             "data_root",
+            "dataset_num_classes",
         }
     )
 
@@ -192,6 +196,9 @@ class StreamSpec:
             shuffle_seed=int(raw.get("shuffle_seed", 1993)),
             stream_seed=int(raw.get("stream_seed", 42)),
             data_root=str(raw.get("data_root", "./data")),
+            dataset_num_classes=(
+                int(raw["dataset_num_classes"]) if raw.get("dataset_num_classes") is not None else None
+            ),
         )
         spec.validate()
         return spec
@@ -206,4 +213,5 @@ class StreamSpec:
             "shuffle_seed": self.shuffle_seed,
             "stream_seed": self.stream_seed,
             "data_root": self.data_root,
+            "dataset_num_classes": self.dataset_num_classes,
         }

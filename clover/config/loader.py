@@ -60,14 +60,24 @@ def load_yaml(path: str) -> Dict[str, Any]:
 
 def _resolve_stream_spec(stream: StreamSection) -> StreamSpec:
     dataset_cls = get_dataset(stream.dataset)
-    num_classes = dataset_cls().num_classes
+    if stream.dataset_num_classes is not None:
+        # Config-only datasets (SPEC §7: image_folder) can't be
+        # constructed with zero args at all -- the count is declared
+        # directly instead of read off a constructed instance.
+        num_classes = stream.dataset_num_classes
+    else:
+        num_classes = dataset_cls(root=stream.data_root).num_classes
     info = DatasetInfo(stream.dataset, num_classes)
 
     if stream.scenario is not None:
         factory = get_scenario(stream.scenario)
-        return factory(
+        spec = factory(
             info, stream.init_cls, stream.increment, stream.stream_seed, **stream.scenario_params
         )
+        # Scenario factories don't know about data_root/dataset_num_classes
+        # (they only see dataset name + class count via DatasetInfo) --
+        # apply the user's actual config on top of whatever they returned.
+        return replace(spec, data_root=stream.data_root, dataset_num_classes=stream.dataset_num_classes)
 
     revisits = [RevisitSpec.from_dict(r) for r in (stream.revisits or [])]
     return StreamSpec(
@@ -79,6 +89,7 @@ def _resolve_stream_spec(stream: StreamSection) -> StreamSpec:
         shuffle_seed=stream.shuffle_seed,
         stream_seed=stream.stream_seed,
         data_root=stream.data_root,
+        dataset_num_classes=stream.dataset_num_classes,
     )
 
 

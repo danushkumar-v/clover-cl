@@ -1,4 +1,4 @@
-# Handoff — clover-cl v2 (2026-07-06: P8 in progress, 6 datasets done)
+# Handoff — clover-cl v2 (2026-07-07: P8 done, P9 next)
 
 Session notes for picking this back up cold in a fresh Claude Code session.
 Read this first, then `CLAUDE.md` → `PLAN.md` → the relevant `SPEC.md`
@@ -7,22 +7,19 @@ section for the next phase.
 ## State right now
 
 - Repo: `D:\Dev\Research\clover-cl`. Work branch: `v2`.
-- `v2` was pushed to `origin/v2` (`b444ec2`) through P5. **P6 (4 commits),
-  P7 (3 commits), and this session's P8 dataset-layer work are committed
-  locally but not yet pushed** — push only if the user asks.
-- `main` is untouched at `a01eaf7` (v1, preserved as-is until the P9 release
-  per SPEC.md — do not merge or push to `main` before then). **v1 turned
-  out to be a genuinely useful read-only reference for P8** (see below) —
-  read via `git show main:<path>`, never checked out.
-- `PLAN.md`: **P0-P7 all done and ticked. P8 (Datasets + extras + docs) is
-  in progress (not ticked) — the 6 built-in datasets are done;
-  `image_folder` config-only dataset, scenario extras, and docs are
-  queued.**
+- `v2` was pushed to `origin/v2` (`b444ec2`) through P5. **P6, P7, and P8
+  are committed locally but not yet pushed** — push only if the user asks.
+- `main` is untouched (v1, preserved as-is until the P9 release per
+  SPEC.md — do not merge or push to `main` before then). **v1 was a
+  genuinely useful read-only reference for P8** — read via `git show
+  main:<path>`, never checked out.
+- `PLAN.md`: **P0-P8 all done and ticked. P9 (Release candidate) is next
+  and last.**
 - Local `.venv` (Python 3.11) has everything installed (`pip install -e
   ".[dev]"` already run) — torch/torchvision/timm/pyyaml/pillow +
   pytest/ruff/mypy/types-PyYAML.
-- Current test suite: **408 tests**. Full `pytest tests/ -v` run takes
-  **~7-9 minutes** (varies) — the registry-driven safety gate
+- Current test suite: **437 tests**. Full `pytest tests/ -v` run takes
+  **~8-9 minutes** — the registry-driven safety gate
   (`tests/test_method_registry_safety_gate.py`, 54 cases: 9 methods × 6
   scenarios) and `tests/test_cli_run_matrix.py` (real subprocess spawns)
   are the expensive parts. Budget for this when working — don't assume
@@ -30,7 +27,7 @@ section for the next phase.
 
 ## Session protocol (from PLAN.md, already established — just follow it)
 
-1. Read `PLAN.md`, implement the *first unchecked* phase only (P8 next).
+1. Read `PLAN.md`, implement the *first unchecked* phase only (P9 next).
 2. Read that phase's `SPEC.md` section(s) first.
 3. **Work in plan mode first** — research (a background Agent for
    reference-repo research has worked well for P5/P6/P7), then present a
@@ -46,13 +43,11 @@ section for the next phase.
    "Generated with Claude Code" line) — explicit standing instruction.
 6. Don't push unless the user explicitly asks (they did, once, at the end
    of the P5 session — that's why `v2` is on GitHub through P5).
-7. Large phases span multiple sessions — deliver in sub-passes (P5: one
-   method then two more; P6: one method per session; P7: metrics library,
-   then report, then run-matrix), logging progress in `PLAN.md`'s Log each
-   time, ticking the phase's box only once *all* of its DONE criteria are
-   met.
+7. Large phases span multiple sessions — deliver in sub-passes, logging
+   progress in `PLAN.md`'s Log each time, ticking the phase's box only
+   once *all* of its DONE criteria are met.
 
-## What's done (P0-P7) — one line each
+## What's done (P0-P8) — one line each
 
 - **P0 — Scaffold**: package layout, decorator registries, pyproject, CI.
 - **P1 — Stream model**: `StreamSpec`/planner/`Experience`/`Stream`/
@@ -88,24 +83,34 @@ section for the next phase.
   subprocess dispatch (crash isolation) — sequential only, GPU-pool
   parallelism deferred (no GPU to test against). See `PLAN.md`'s three
   2026-07-06 P7 log entries for full design detail.
-- **P8 (in progress) — the 6 built-in datasets done**: `clover/datasets/
-  cifar100.py` (torchvision-backed, `download=True`) + `clover/datasets/
+- **P8 — Datasets + extras + docs**: `clover/datasets/cifar100.py`
+  (torchvision-backed, `download=True`) + `clover/datasets/
   image_folder_base.py:ImageFolderCLDataset` (shared base — v1 had 5
   structurally-identical `ImageFolder`-backed wrappers; extracted into one
   base since all 5 already existed and matched exactly) with 5 thin
-  subclasses (CUB-200, ImageNet-R, ImageNet-A, OmniBenchmark, VTAB). No
-  real downloads anywhere: CIFAR-100 tests monkeypatch `torchvision
-  .datasets.CIFAR100` (`tests/conftest.py`, ported from v1); the
-  `ImageFolder`-based ones are tested against real tiny hand-built fixture
-  directories. `image_folder` config-only dataset, scenario extras, and
-  docs are queued — see "Next up" below.
+  subclasses (CUB-200, ImageNet-R, ImageNet-A, OmniBenchmark, VTAB), plus
+  `image_folder` — a config-only dataset (`dataset: {type: image_folder,
+  root:, num_classes:}`) needing no new Python at all. New
+  `distribution_shift` scenario (same-id revisit, once, end-of-stream);
+  `symmetric_pair`/`near_miss`/`hierarchical` documented as out-of-scope
+  in `docs/CONCEPTS.md` §8 (SPEC explicitly permits this). Two real,
+  pre-existing gaps surfaced and fixed while proving `image_folder` works
+  end-to-end (see Judgment calls below): `data_root` was never actually
+  passed to a dataset constructor, and no code anywhere ever composed a
+  dataset's declared `train_trsf`/`test_trsf`/`common_trsf` into an actual
+  transform. `docs/CONCEPTS.md` rewritten for v2 (was still v1's
+  `OverlapSpec` framing); new `docs/extending.md` with one worked example
+  each for dataset/scenario/method/backbone registration. No real dataset
+  downloads or network access used anywhere — CIFAR-100 tests monkeypatch
+  `torchvision.datasets.CIFAR100`; the `ImageFolder`-based ones (including
+  `image_folder` itself) use real tiny hand-built fixture directories.
 
 ## Deferred items (logged in `PLAN.md`'s `## Log`, not forgotten)
 
 - **CIFAR-100-vs-published-accuracy verification** (every phase from P3
-  onward) — no GPU/Snellius access this session, CIFAR-100 doesn't exist
-  as a dataset yet (P8). User runs these on the cluster once real datasets
-  land.
+  onward) — no GPU/Snellius access this session. CIFAR-100 exists as a
+  real dataset now (P8); still needs the user's own cluster access to
+  actually run.
 - **Per-method typed config schemas** — still deferred; no method-level
   config knob has needed validation badly enough yet to justify it.
 - **CODA-Prompt's gradient masking**, **L2P's auxiliary key-pulling loss**
@@ -123,14 +128,20 @@ section for the next phase.
   a real feature but untestable/inoperative on this GPU-less machine
   either way. Adding it later is a pure enhancement (swap the dispatch
   loop for a thread pool), not a redesign.
-- **CIFAR-100-vs-published-accuracy verification is *finally* unblocked
-  as of P8** — CIFAR-100 exists as a real dataset now (`clover/datasets/
-  cifar100.py`). Still needs the user's own Snellius/GPU access to
-  actually run (this machine has none), but the earlier blocker ("CIFAR
-  -100 doesn't exist yet") no longer applies — worth revisiting whether
-  any of P3/P5/P6's deferred CIFAR-100 sanity runs should happen now.
+- **Real (non-synthetic) dataset + real backbone training, end to end**
+  (found in P8, belongs to P9/cluster scope) — every registered backbone
+  (`tiny_mlp`/`tiny_vit`) is a documented, synthetic-only stand-in
+  (1-channel, sized for the 8x8 synthetic dataset); no method currently
+  threads `in_chans` or a real timm base model through `build()`. The
+  infrastructure exists (`clover/backbones/loader.py:resolve_base_model`,
+  registry-first then timm fallback) but no method calls it yet — every
+  method's `build()` calls `get_backbone(...)` directly instead. Fine for
+  now (CLAUDE.md: no real training locally, ever — real runs are cluster
+  jobs), but worth revisiting whether P9's full matrix run needs a method
+  wired to a real timm ViT, or whether the existing toy backbones are
+  accepted as permanently synthetic-only.
 
-## Judgment calls worth knowing about (for P8 and beyond)
+## Judgment calls worth knowing about
 
 - **Don't assume a shared base class before confirming at least two things
   actually need the same lifecycle — but do extract one once several
@@ -144,13 +155,41 @@ section for the next phase.
   way around. The rule isn't "never share code," it's "let confirmed
   duplication justify the abstraction, don't guess ahead of it."
 - **This repo's own `v1`/`main` branch is a legitimate, sanctioned
-  reference for P8-and-onward** (read via `git show main:<path>`, never
+  reference from P8 onward** (read via `git show main:<path>`, never
   checked out) — SPEC says `CLDataset` ABC "≈ v1" explicitly, so porting/
-  adapting v1's own dataset (and likely scenario-extras) code is
-  fundamentally different from the LAMDA-PILOT "cite, never copy" rule:
-  it's evolving this same project's prior version, not reusing a third
-  party's. Worth checking v1 first for any future phase that's revisiting
-  functionality v1 already had (scenario extras, docs content, etc.).
+  adapting v1's own dataset/scenario/docs code is fundamentally different
+  from the LAMDA-PILOT "cite, never copy" rule: it's evolving this same
+  project's prior version, not reusing a third party's.
+- **A "prove it end-to-end" DONE criterion doesn't require chasing every
+  downstream layer if a boundary belongs to a different, already-shipped
+  phase** (P8, `image_folder`'s literal SPEC acceptance criterion): the
+  honest scope call was to run the real dataset+transform+benchmark
+  pipeline all the way through a real `DataLoader` batch (proving the
+  *dataset layer*, P8's actual scope, works), and stop at the
+  pre-existing, documented backbone/channel-count gap (P5/P6's scope,
+  already logged in P5's own log entry: "real cluster configs against an
+  actual pretrained timm ViT would tune these separately") rather than
+  quietly expanding scope to fix a different phase's gap under this one's
+  banner. When a DONE criterion's literal wording would require touching
+  another phase's territory, verify as far as the current phase's actual
+  responsibility goes and say precisely where and why it stops.
+- **A pipeline stage that's never been exercised for real can hide a
+  totally silent gap indefinitely** (P8's biggest find): `CLDataset`
+  subclasses declare `train_trsf`/`test_trsf`/`common_trsf`, but *nothing*
+  in `cli.py`/`Trainer` ever composed them into an actual `transform` and
+  applied it — v1's `DataManager` did this centrally
+  (`transforms.Compose([*train_trsf, *common_trsf])`); v2 never got an
+  equivalent. Invisible for 6 real datasets across P3-P8 because every
+  dataset test either passed `transform=` manually or used `synthetic`
+  (empty transform lists) — only surfaced when this session ran the
+  *first* real (non-synthetic) dataset through a real `clover run`. Fixed
+  with `cli.py:_apply_default_transforms(dataset)`. **Lesson: a "some day
+  another dataset/method will exercise this" gap can sit latent through
+  several phases' tests all passing — the only reliable check is actually
+  running the full path for real, once, not just unit-testing each piece
+  in isolation.** Same session also found `StreamSpec.data_root` was
+  parsed/validated/serialized end-to-end but never passed to any dataset
+  constructor — same root cause, same fix opportunity.
 - **Any per-experience *structural* growth that must be reflected before
   `load_state_dict` runs belongs in `before_experience`, never
   `train_experience`/`after_experience`** — the Trainer's resume-replay
@@ -196,7 +235,19 @@ section for the next phase.
   every registered dataset module transitively) — fixed with a
   `[[tool.mypy.overrides]] module = ["torchvision.*"]
   ignore_missing_imports = true` block in `pyproject.toml` (torchvision
-  ships no `py.typed` marker; there was nothing to fix on our side).
+  ships no `py.typed` marker; there was nothing to fix on our side). Also
+  hit a `ClassVar` subtlety: mypy rejects instance-attribute assignment to
+  a name annotated `ClassVar` in a base class — `ImageFolderCLDataset
+  ._num_classes` needed to support both class-level (5 named datasets)
+  and instance-level (`image_folder`) assignment, so it's a plain `int`
+  annotation, not `ClassVar[int]`.
+- **A dataclass's `to_dict()` output must stay a valid `from_dict()` input
+  for every field, or `config_resolved.yaml` round-tripping breaks** (P8):
+  adding `StreamSpec.dataset_num_classes` and wiring it into `to_dict()`
+  without also adding it to `StreamSection._ALLOWED_KEYS` broke
+  re-resolving a saved resolved config — caught by the full test suite,
+  not by the narrower schema-only tests. Any new `StreamSpec`/
+  `StreamSection` field needs both directions checked together.
 - **`config_resolved.yaml` doesn't carry the scenario *name*** (found
   while designing `clover report`, P7) — `ResolvedConfig.stream_spec` is
   post-resolution, so only the concrete `revisits` are recorded. Rather
@@ -222,67 +273,37 @@ section for the next phase.
   directories*). Use a relative or drive-lettered path when manually
   testing CLI commands on this machine.
 
-## Next up: P8 continued — `image_folder` dataset, scenario extras, docs
+## Next up: P9 — Release candidate (SPEC §13-§14, last phase)
 
-The 6 built-in datasets are done (this session), with zero real downloads
-or network access used — CIFAR-100 tests monkeypatch
-`torchvision.datasets.CIFAR100`; the 5 `ImageFolder`-based ones use real
-tiny hand-built fixture directories. Three pieces left in this phase:
+- `docs/MIGRATION.md` (legacy API → v2 configs) — check what's already
+  there (`docs/MIGRATION.md` exists; likely needs a pass to reflect P6-P8
+  additions rather than being written from scratch).
+- README: quickstart, smoke→SLURM workflow, scenario table, results,
+  citations + no-copied-code attribution note.
+- Full 9-method × 6-scenario (or 7, now that `distribution_shift` exists —
+  confirm with the user whether the matrix should include it) matrix run
+  on the Snellius cluster — needs the user's own cluster access, not
+  runnable from this machine.
+- Tag RC; `main` preserved as `v1` branch (confirm exact mechanics with
+  the user before touching `main` at all — SPEC says preserve it, don't
+  guess the git operations that means).
+- Worth resolving first: whether any deferred CIFAR-100-vs-published
+  -accuracy sanity runs (P3/P5/P6) should happen as part of this phase's
+  cluster work, since CIFAR-100 now exists as a real dataset (P8).
 
-- **`image_folder` config-only dataset** (SPEC §7: `dataset: {type:
-  image_folder, root: ..., num_classes: ...}`) — needs
-  `StreamSection.dataset` (`clover/config/schema.py`) to accept a mapping
-  in addition to a plain string, threading through `_resolve_stream_spec`
-  (`clover/config/loader.py`) and `cmd_run`/`_dataset_info` (`clover/
-  cli.py`), which all currently assume `stream.dataset` is a registry-key
-  string. A real (if small) config-schema extension, not just "register
-  another class" — give it its own focused design pass.
-- **Scenario extras** (SPEC §8: `hierarchical`/`near_miss`/
-  `distribution_shift`/`symmetric_pair`, "ported opportunistically...
-  absence must not block v2.0"). Already researched this session against
-  v1's own scenario code (`git show main:clover/scenarios/{hierarchical,
-  near_miss,distribution_shift,symmetric_pair}.py`) — a key finding:
-  **v1's own `build_stream_spec` function for all 4 is generic
-  `RevisitSpec` boilerplate, identical in shape across all 4** — the real
-  distinctive per-scenario mechanism (taxonomic grouping, visual
-  adjacency metadata, image-subset ratio, bidirectional 50/50 sharing)
-  only ever lived in the legacy `OverlapSpec`/`build_spec` path, which P1
-  already removed from v2 entirely. So this isn't a port of working v2
-  -shaped code — it's re-deriving each scenario's *intent* against v2's
-  unified `RevisitSpec` axes (`label: same|new`, `images: same|new|
-  partial:<pct>`, `placement`) from scratch. Expected outcome, reasoned
-  through already: `distribution_shift` maps cleanly (`label="same"`,
-  `images="new"` or `"partial:<pct>"`); `symmetric_pair` maps only
-  approximately (v2's model has no bidirectional-task-pair concept, just
-  "revisit later in the stream" — would be a one-directional
-  simplification of v1's true bidirectional intent); `near_miss` reduces
-  to plain `disjoint_baseline` (zero class sharing, and v2's `StreamSpec`
-  has no field for the "adjacency metadata" v1 recorded for analysis
-  only); `hierarchical` likely doesn't fit v2's sequential/budget-driven
-  class-to-task assignment at all without deeper core changes SPEC
-  doesn't ask for here. Don't force a poor fit — SPEC explicitly permits
-  documenting a scenario as out of scope for v2.0.
-- **`docs/concepts.md`/`docs/extending.md`** — worked examples land better
-  once the above exist to reference concretely; do this last.
-
-DONE (whole phase): built-in metadata smoke tests green (already true for
-the 6 datasets); a tutorial-followed custom dataset runs a full smoke
-benchmark without touching core (needs `image_folder` or a documented
-`@register_dataset` example — `docs/extending.md`'s job).
-
-Once all three land: tick P8's checkbox in `PLAN.md`.
+DONE (whole phase): full 9-method × 6-scenario matrix reproduced on
+Snellius from shipped configs; README workflow verified end-to-end; `main`
+preserved as `v1` branch.
 
 ## Quick commands
 
 ```
 cd D:\Dev\Research\clover-cl
-.venv/Scripts/python.exe -m pytest tests/ -v                     # full suite, ~7-9 min
+.venv/Scripts/python.exe -m pytest tests/ -v                     # full suite, ~8-9 min
 .venv/Scripts/python.exe -m ruff check clover tests
 .venv/Scripts/python.exe -m mypy clover/core clover/config
 .venv/Scripts/python.exe -m clover.cli smoke                     # all 9 registered methods
 git checkout v2 && git pull                                      # resume from here
 ```
 
-Delete this file once P8 is underway and this content is stale, or update
-it in place at the end of each future session — whichever the next
-session prefers.
+Update this file in place at the end of each future session.

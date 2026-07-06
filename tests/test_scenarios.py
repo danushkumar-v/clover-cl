@@ -122,3 +122,66 @@ def test_scenario_plan_has_contiguous_head_sizing(name):
     assert plan.head_size_schedule == sorted(plan.head_size_schedule)
     all_ids = {c for cls_list in plan.task_class_lists for c in cls_list}
     assert plan.head_size_schedule[-1] == len(all_ids)
+
+
+def test_distribution_shift_is_registered():
+    assert "distribution_shift" in list_scenarios()
+
+
+def test_distribution_shift_shifted_classes_keep_same_id_once_at_the_end():
+    info = DatasetInfo("synthetic", 20)
+    spec = get_scenario("distribution_shift")(info, init_cls=5, increment=5, seed=42, n_shifted=3)
+    plan = resolve(spec, info)
+
+    shifted = set(range(3))
+    assert plan.echo_table == {}  # same-id, no echo ids at all
+    assert plan.revisit_ids == shifted
+    _fixed_task_sizes(plan.task_class_lists, [5, 5, 5, 5])
+    # unlike cumulative_drift, the shift lands only in the final task
+    for cls_list in plan.task_class_lists[1:-1]:
+        assert shifted.isdisjoint(cls_list)
+    assert shifted <= set(plan.task_class_lists[-1])
+
+
+def test_distribution_shift_defaults_to_disjoint_images():
+    info = DatasetInfo("synthetic", 20)
+    spec = get_scenario("distribution_shift")(info, init_cls=5, increment=5, seed=42, n_shifted=2)
+    assert spec.revisits[0].images == "new"
+
+
+def test_distribution_shift_split_ratio_below_one_yields_partial_images():
+    info = DatasetInfo("synthetic", 20)
+    spec = get_scenario("distribution_shift")(
+        info, init_cls=5, increment=5, seed=42, n_shifted=2, split_ratio=0.3
+    )
+    assert spec.revisits[0].images == "partial:0.3"
+
+
+def test_distribution_shift_rejects_n_shifted_at_or_above_init_cls():
+    info = DatasetInfo("synthetic", 20)
+    with pytest.raises(ValueError, match="must be in \\[1, init_cls=5\\)"):
+        get_scenario("distribution_shift")(info, init_cls=5, increment=5, seed=42, n_shifted=5)
+
+
+def test_distribution_shift_rejects_n_shifted_at_or_above_increment():
+    info = DatasetInfo("synthetic", 20)
+    with pytest.raises(ValueError, match="must be < increment"):
+        get_scenario("distribution_shift")(info, init_cls=5, increment=3, seed=42, n_shifted=3)
+
+
+def test_distribution_shift_distinct_from_cumulative_drift_and_long_range_revisit():
+    info = DatasetInfo("synthetic", 20)
+    shift_plan = resolve(
+        get_scenario("distribution_shift")(info, init_cls=5, increment=5, seed=42, n_shifted=3), info
+    )
+    drift_plan = resolve(
+        get_scenario("cumulative_drift")(info, init_cls=5, increment=5, seed=42, n_anchors=3), info
+    )
+    long_range_plan = resolve(get_scenario("long_range_revisit")(info, init_cls=5, increment=5, seed=42), info)
+
+    # cumulative_drift: anchors recur in *every* later task, not just the last.
+    assert any(set(range(3)) <= set(cls_list) for cls_list in drift_plan.task_class_lists[1:-1])
+    assert not any(set(range(3)) <= set(cls_list) for cls_list in shift_plan.task_class_lists[1:-1])
+    # long_range_revisit: fresh echo id (label="new"), not a same-id revisit.
+    assert long_range_plan.echo_table and not long_range_plan.revisit_ids
+    assert shift_plan.revisit_ids and not shift_plan.echo_table

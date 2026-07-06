@@ -17,7 +17,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - [x] **P5 — Backbones + prompt trio** (SPEC §6.4): backbone registry with config-selectable base models (timm/HF name or user class), prompt-pool / prefix / CODA wrappers; L2P, DualPrompt, CODA-Prompt using core loss policies (no hand-rolled `-inf` masking — lint test enforces). DONE: all three pass safety gate + smoke; finite loss and sane accuracy on all 6 scenarios (incl. same-id cumulative_drift) on the synthetic stream; disjoint CIFAR-100 ≈ published per method. **CIFAR-100-vs-published leg deferred — see Log.**
 - [x] **P6 — Remaining methods** (SPEC §6.5): APER-Adapter, EASE, RanPAC, MOS, TUNA (adapter wrappers as needed); hyperparameter defaults carried from bench configs with provenance notes. DONE: each passes safety gate + smoke + disjoint CIFAR-100 sanity vs. published range; comparison table in docs/methods.md covers all 9. **CIFAR-100-vs-published leg deferred for all 5 (same reason as P3/P4/P5) — see Log.**
 - [x] **P7 — Metrics + reporting + matrix** (SPEC §10): per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) + CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware) metrics ported with fixture tests; `clover report`; `run-matrix` orchestrator (resume/retry/stale/GPU-pool). DONE: hand-computed metric fixtures green; two-method synthetic demo report renders in CI; matrix resume test green. **GPU-pool parallelism deferred (sequential dispatch only) — see Log.**
-- [ ] **P8 — Datasets + extras + docs** (SPEC §7, §8, §13): CUB-200, ImageNet-R/A, OmniBenchmark, VTAB wrappers + staging docs; `image_folder` config-only dataset; scenario extras as capacity allows; docs/concepts.md, docs/extending.md (method/dataset/scenario/backbone worked examples). DONE: built-in metadata smoke tests green; a tutorial-followed custom dataset runs a full smoke benchmark without touching core.
+- [x] **P8 — Datasets + extras + docs** (SPEC §7, §8, §13): CUB-200, ImageNet-R/A, OmniBenchmark, VTAB wrappers + staging docs; `image_folder` config-only dataset; scenario extras as capacity allows; docs/concepts.md, docs/extending.md (method/dataset/scenario/backbone worked examples). DONE: built-in metadata smoke tests green; a tutorial-followed custom dataset runs a full smoke benchmark without touching core.
 - [ ] **P9 — Release candidate** (SPEC §13–§14): docs/MIGRATION.md (legacy API → v2 configs), README (quickstart, smoke→SLURM workflow, scenario table, results, citations + no-copied-code attribution note); full matrix on cluster; tag RC. DONE: full 9-method × 6-scenario matrix reproduced on Snellius from shipped configs; README workflow verified end-to-end; `main` preserved as `v1` branch.
 
 ## Log
@@ -821,3 +821,85 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   -v2.0 rather than force-fit (SPEC explicitly permits this: "absence
   must not block v2.0"). Then `docs/concepts.md`/`docs/extending.md`,
   once there's more to reference concretely. Once all land: tick P8's box.
+
+- **2026-07-07, P8 done (all 3 remaining pieces landed; box ticked).**
+  `image_folder`: `StreamSection.from_dict` now detects an inline
+  `dataset: {type:, root:, num_classes:}` mapping (vs. a plain string),
+  routing `type`->dataset name, `root`->`data_root` (overriding the
+  existing default), `num_classes`->the new `StreamSpec
+  .dataset_num_classes` field (`None` for every named built-in, which
+  already knows its own class count). `clover/datasets/
+  image_folder_config.py:ImageFolderDataset` (`dataset_dir=""`, reusing
+  `ImageFolderCLDataset`) requires an explicit `num_classes` (can't be
+  zero-arg-constructed like the named built-ins) and cross-checks it
+  against the actual on-disk class-subdirectory count, raising immediately
+  on a mismatch rather than silently training on the wrong head size.
+- **Pre-existing gap #1 (found, not introduced): `StreamSpec.data_root`
+  was parsed/validated/serialized end-to-end but never actually passed to
+  a dataset constructor anywhere in `cli.py`** -- every dataset was always
+  built from its class-level default root. Fixed as a natural part of
+  `image_folder` (whose entire point is a user-supplied root): `cmd_run`/
+  `cmd_inspect`/`cmd_preflight` now thread `root=resolved.stream_spec
+  .data_root` (+ `num_classes` when set) through dataset construction.
+- **Pre-existing gap #2 (found, not introduced, more consequential): no
+  code anywhere ever composed a dataset's declared `train_trsf`/
+  `test_trsf`/`common_trsf` into an actual transform and applied it** --
+  v1's `DataManager` did this centrally (`transforms.Compose([*train_trsf,
+  *common_trsf])`); v2 never got an equivalent, so every real
+  (non-synthetic) dataset would have silently trained on raw PIL images
+  the first time anyone actually ran one through `clover run`. Surfaced
+  only now because this session did the first real (non-synthetic)
+  end-to-end `clover run` this repo has ever attempted -- prior dataset
+  tests always passed `transform=` manually or used `synthetic` (empty
+  transform lists, so the gap was invisible). Fixed with
+  `cli.py:_apply_default_transforms(dataset)`, called on both train/test
+  datasets in `cmd_run` and `cmd_smoke`'s `_smoke_check_method`.
+- **Real end-to-end proof, scoped honestly**: built a tiny hand-made
+  `image_folder` fixture (real PNGs via PIL) and ran the full pipeline --
+  `clover inspect`/`clover preflight` against an inline `{type:
+  image_folder, ...}` config (passing), plus the actual `Trainer`-used
+  `ExperienceDataset`+`DataLoader` machinery pulling a real batch and
+  confirming `(3, 224, 224)` float tensors with correct labels. Did
+  **not** chase a full `clover run` through an actual method/backbone:
+  every registered backbone (`tiny_mlp`/`tiny_vit`) is a documented,
+  synthetic-only stand-in (1-channel, sized for the 8x8 synthetic
+  dataset -- see P5's log entry above: "real cluster configs against an
+  actual pretrained timm ViT would tune these separately"), and no method
+  currently threads `in_chans`/a real timm base model through `build()`.
+  That gap is pre-existing, shared by every one of the 5 already-shipped
+  `ImageFolder`-backed datasets (none had ever been run through a real
+  method/backbone either), and belongs to P5/P6/cluster-workflow scope,
+  not P8's dataset-layer scope -- confirmed against CLAUDE.md's "no real
+  training locally, ever" rule.
+- **Scenario extras, final scope call**: only `distribution_shift`
+  implemented (`clover/scenarios/distribution_shift.py`) -- `n_shifted`
+  of task 0's classes reappear once, same-id, `placement="end_of_stream"`,
+  distinct from `cumulative_drift` (same-id but *every* task) and
+  `long_range_revisit`/`exact_replay` (fresh echo id, not same-id).
+  `symmetric_pair`/`near_miss`/`hierarchical` are documented as
+  out-of-scope in `docs/CONCEPTS.md` §8 rather than force-fit: v2's
+  `RevisitSpec` has no bidirectional (backward-in-time) class injection,
+  no zero-overlap adjacency bookkeeping, and no external-taxonomy-driven
+  class-to-task assignment -- SPEC explicitly permits their absence.
+- `docs/CONCEPTS.md` rewritten in place for v2 (was still v1's
+  `OverlapSpec`/`OverlapDataManager`/`preserve_task_size` framing) --
+  `StreamSpec`/`RevisitSpec`'s real v2 field syntax, echo-id vs. same-id
+  revisits, a corrected code example (`clover.core.stream.build_benchmark`
+  needs `dataset_info` + both class-to-indices maps, not just a spec), a
+  new dataset-staging section (all 6 real built-ins + `image_folder`),
+  and the scenario-extras non-implementation reasoning. New
+  `docs/extending.md`: one worked, runnable example each for
+  dataset/scenario/method/backbone registration, using `image_folder`
+  and `distribution_shift` as the dataset/scenario examples per the plan.
+- **Two regressions caught by the full suite, fixed same-session**: (1)
+  `StreamSpec.to_dict()` writes `dataset_num_classes`, but
+  `StreamSection._ALLOWED_KEYS`/`from_dict` didn't accept it as a
+  top-level key (only via the inline-mapping path) -- broke
+  `config_resolved.yaml` round-trip re-resolution; fixed by adding it to
+  `_ALLOWED_KEYS` and reading it directly when `dataset` is a plain
+  string. (2) `test_package_scaffold.py`'s two registry-membership tests
+  still asserted the pre-`image_folder`/pre-`distribution_shift` sets;
+  updated both.
+- Full suite: 437 tests, all green (`ruff check clover tests`, `mypy
+  clover/core clover/config`, `clover smoke` 9/9 also green). P8 fully
+  done -- next unchecked phase: P9 (release candidate).
