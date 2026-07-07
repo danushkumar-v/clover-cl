@@ -87,15 +87,18 @@ clover report runs/my_run runs/other   # aggregate one or more runs into a summa
 clover run-matrix configs/matrix_full.yaml   # sweep methods x scenarios x datasets x seeds
 ```
 
-**⚠️ Known gap (tracked as `PLAN.md`'s P10 phase):** no method or backbone
-yet threads a channel count through, so every registered backbone
-(`tiny_mlp`/`tiny_vit`) assumes 1-channel input — sized for the built-in
-`synthetic` dataset only. A `clover run` against any real (3-channel)
-dataset — CIFAR-100, the `ImageFolder`-backed built-ins, `image_folder` —
-will crash on the very first training batch until P10 lands. `clover
-inspect`/`clover preflight` (config resolution + stream-plan feasibility)
-already work correctly against real datasets today; only the actual
-training step is blocked.
+Real (3-channel) datasets — CIFAR-100, the `ImageFolder`-backed built-ins,
+`image_folder` — train correctly through every method (P10 fixed channel
+-count threading end-to-end). Every method still defaults to its own
+tiny, untrained, CPU-only stand-in backbone (`tiny_mlp`/`tiny_vit`) unless
+overridden — fine for shape-correctness dry runs, not for a real accuracy
+comparison. **SimpleCIL is currently the only one of the 9 methods that
+can be pointed at a real pretrained timm ViT directly**
+(`method: {name: simplecil, backbone: vit_base_patch16_224, pretrained:
+true}`); the other 8 methods' prompt/adapter wrapper mechanisms need their
+base to implement CLOVER-specific hooks that a raw timm ViT doesn't have —
+splicing prompts/prefixes/adapters into real timm ViT internals is future
+work, not yet done (see `PLAN.md`'s P10 log entry).
 
 ---
 

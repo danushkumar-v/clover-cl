@@ -1,12 +1,16 @@
 # Full 9-method x 7-scenario x 3-seed matrix on CIFAR-100 (P9, SPEC §11.1):
 #   sbatch scripts/slurm_run.sh configs/matrix_full.yaml
 # NOTE:
-#   - Real training on any non-synthetic dataset currently crashes on the
-#     first batch: no method/backbone threads a channel count through, so
-#     TinyViT/TinyMLP assume 1-channel input (see PLAN.md's P10 phase).
-#     This matrix is not runnable end-to-end until P10 lands. Validate its
-#     shape/schema locally first: `clover preflight` resolves and checks
-#     cell 0 automatically when `clover run-matrix` starts.
+#   - Real training now works correctly, channel-wise (P10 fixed this --
+#     see PLAN.md; proven via tests/test_backbones_real_image.py). Every
+#     method here still uses its own tiny, untrained, CPU-only stand-in
+#     backbone by default -- fine for a shape-correctness dry run, not for
+#     a real accuracy comparison. SimpleCIL is the only one of the 9 that
+#     can be pointed at a real pretrained timm ViT directly
+#     (method_overrides: {simplecil: {backbone: vit_base_patch16_224,
+#     pretrained: true}}); the other 8 methods' prompt/adapter wrapper
+#     mechanisms need a TinyViT-shaped base (real timm internals hooking
+#     for them is future work, not yet done).
 #   - init_cls/increment (10/10) are shared across every cell regardless of
 #     method/scenario -- verified every scenario's own defaults
 #     (n_anchors/n_shifted/anchor_task/overlap_fraction) fit within a

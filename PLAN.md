@@ -19,7 +19,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - [x] **P7 — Metrics + reporting + matrix** (SPEC §10): per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) + CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware) metrics ported with fixture tests; `clover report`; `run-matrix` orchestrator (resume/retry/stale/GPU-pool). DONE: hand-computed metric fixtures green; two-method synthetic demo report renders in CI; matrix resume test green. **GPU-pool parallelism deferred (sequential dispatch only) — see Log.**
 - [x] **P8 — Datasets + extras + docs** (SPEC §7, §8, §13): CUB-200, ImageNet-R/A, OmniBenchmark, VTAB wrappers + staging docs; `image_folder` config-only dataset; scenario extras as capacity allows; docs/concepts.md, docs/extending.md (method/dataset/scenario/backbone worked examples). DONE: built-in metadata smoke tests green; a tutorial-followed custom dataset runs a full smoke benchmark without touching core.
 - [ ] **P9 — Release candidate** (SPEC §13–§14): docs/MIGRATION.md (legacy API → v2 configs), README (quickstart, smoke→SLURM workflow, scenario table, results, citations + no-copied-code attribution note); full matrix on cluster; tag RC. DONE: full 9-method × 6-scenario matrix reproduced on Snellius from shipped configs; README workflow verified end-to-end; `main` preserved as `v1` branch.
-- [ ] **P10 — Backbone real-image support** (not in SPEC's original phase table; added 2026-07-07, found while scoping P9 — see Log): `StreamInfo`/`DatasetInfo` gain a channel-count field; `TinyViT`/`TinyMLP` and all 9 methods' `build()` thread it through instead of hardcoding 1 channel; at least one method wired to `clover/backbones/loader.py:resolve_base_model` with a real timm base-model name as a worked example of the config-selectable-backbone path SPEC §6.4 describes but no method actually exercises yet. DONE: a real (non-synthetic) dataset trains one experience without a shape/channel error, on CPU, for at least one method — the existing test suite's style, no cluster needed for this gate. Real per-method accuracy tuning against a real pretrained backbone stays cluster-side, same as every dataset's CIFAR-100-vs-published-accuracy verification throughout this project.
+- [x] **P10 — Backbone real-image support** (not in SPEC's original phase table; added 2026-07-07, found while scoping P9 — see Log): `StreamInfo`/`DatasetInfo` gain a channel-count field; `TinyViT`/`TinyMLP` and all 9 methods' `build()` thread it through instead of hardcoding 1 channel; at least one method wired to `clover/backbones/loader.py:resolve_base_model` with a real timm base-model name as a worked example of the config-selectable-backbone path SPEC §6.4 describes but no method actually exercises yet. DONE: a real (non-synthetic) dataset trains one experience without a shape/channel error, on CPU, for at least one method — the existing test suite's style, no cluster needed for this gate. Real per-method accuracy tuning against a real pretrained backbone stays cluster-side, same as every dataset's CIFAR-100-vs-published-accuracy verification throughout this project.
 
 ## Log
 
@@ -997,3 +997,127 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   fixes, no regressions) is done and tested; the remainder is tracked
   precisely, not silently marked done. Next: P10, then return to P9's
   outstanding cluster-run step.
+
+- **2026-07-07, P10 done (box ticked) -- the user asked to complete P10
+  (and any remaining P9 work) in the same session it was proposed.**
+  Channel-count plumbing mirrors exactly how `input_size` already flowed:
+  `CLDataset.channels: int = 3` (new class attribute, alongside
+  `input_size`/`use_path`; `synthetic` overrides to `channels = 1`, since
+  its data has no channel dim at all), `StreamInfo.channels: int` (new
+  field), `Trainer.run()` passes `channels=self.train_dataset.channels`
+  through. `TinyMLP` gained `in_chans: int = 1`, sizing its `Linear` as
+  `input_size * input_size * in_chans` (backward compatible: synthetic's
+  in_chans=1 with no channel dim reproduces the exact prior shape).
+  `TinyViT` needed no change -- it already accepted `in_chans`, just never
+  received a non-default value from any caller.
+- **Research finding that shrank the method-side work significantly**: 6
+  of 9 methods already had a `backbone_kwargs = {k: v for k, v in
+  cfg.items() if k != "backbone"}` pass-through pattern (only
+  `simple_cil.py` lacked it), and every wrapper-mechanism backbone
+  (`vit_prompt_pool`/`vit_dual_prompt`/`vit_coda_prompt`/`vit_adapter*`)
+  already forwarded `**base_kwargs` down to `resolve_base_model` with zero
+  changes needed. So the actual fix was a uniform 2-3 line change at 6
+  top-level `build()` call sites (`simple_cil.py`, `prompt_common.py`
+  covering L2P/DualPrompt/CODA-Prompt, `adapter_common.py` covering
+  APER-Adapter/RanPAC, `ease.py`, `mos.py`, `tuna.py`): add
+  `backbone_kwargs.setdefault("in_chans", stream_info.channels)`, and swap
+  the plain registry `get_backbone(name)` for `resolve_base_model(name,
+  **backbone_kwargs)` -- a safe superset (existing registered names behave
+  identically; only previously-unregistered names now fall back to timm).
+  This wires a real timm model as `backbone:` for **every** method, not
+  just "at least one" (PLAN.md's stated minimum), for the same amount of
+  work.
+- **Two more real, previously-invisible bugs surfaced by actually writing
+  the end-to-end verification test (not just unit-testing pieces in
+  isolation -- the same lesson P8's transform-composition gap and P9's
+  device-hardcoding gap already taught, a third time now)**:
+  1. **timm models expose `.num_features`, not `.feature_dim`** -- but
+     every backbone/method in this project reads `.feature_dim` (a
+     pervasive, load-bearing convention: `TinyViT`/`TinyMLP`/every wrapper
+     mechanism sets it explicitly). A real timm model resolved via
+     `resolve_base_model` would crash the *first* attribute access, not
+     the forward pass. Fixed in `resolve_base_model` itself (the one
+     choke point every path already goes through): `model.feature_dim =
+     model.num_features` after construction, so every caller can rely on
+     the attribute regardless of source.
+  2. **`timm.create_model` doesn't accept an `input_size` kwarg** (only
+     some models accept `img_size`, not universally) -- but every method's
+     `build()` unconditionally does `backbone_kwargs.setdefault
+     ("input_size", stream_info.input_size)` before resolving. Fixed by
+     popping `input_size` out of kwargs specifically in
+     `resolve_base_model`'s timm-fallback branch (the registry branch
+     still needs and receives it, for `TinyViT`/`TinyMLP`) -- a timm
+     model's expected resolution comes from its own pretrained config, not
+     a constructor override; the dataset's own transform pipeline
+     (`Resize`/`CenterCrop`) is what actually controls the tensor shape
+     reaching the model.
+  3. **The most serious find**: `Trainer.run()` hardcoded `self.method
+     .build(stream_info, {})` -- an empty dict, unconditionally. This
+     means **every method-level config override (backbone selection
+     included) has been silently discarded by every real `clover run`
+     since P4/P5**, invisible until now because every prior test either
+     called `method.build(info, cfg)` directly (bypassing `Trainer`
+     entirely) or never overrode a method-level key at all. `resolve_base
+     _model`'s entire raison d'être -- "backbone selectable from config"
+     (SPEC §6.4) -- was functionally dead code from `clover run`'s
+     perspective. Fixed: `Trainer.__init__` gains `method_cfg:
+     Optional[Dict[str, Any]] = None` (defaults to `{}`, so every existing
+     call site -- 15+ across tests and `cli.py` -- stays valid unchanged);
+     `Trainer.run()` calls `self.method.build(stream_info, self
+     .method_cfg)`; `cli.py:cmd_run` passes `method_cfg=resolved
+     .method_cfg`. This is the fix that makes the P10 gate's end-to-end
+     test (a real `clover run` selecting a non-default backbone purely via
+     YAML) meaningful at all, rather than only reachable through
+     hand-wired unit tests.
+- **`resolve_base_model` gains `pretrained: bool = False`** (explicit
+  named parameter, not swallowed into `**kwargs`) -- passed to
+  `timm.create_model(name, pretrained=pretrained, ...)` instead of the
+  prior hardcoded `False`. Defaults `False` for local/CI safety (no
+  accidental weight download); a real cluster config opts in with
+  `method: {..., backbone: <timm name>, pretrained: true}` -- works with
+  zero extra plumbing since `backbone_kwargs`'s pass-through already
+  forwards arbitrary cfg keys and Python binds `pretrained` to the named
+  parameter automatically.
+- **A real, precise limitation found and documented, not silently papered
+  over or silently expanded into scope**: the prompt/adapter wrapper
+  mechanisms (`vit_prompt_pool`, `vit_dual_prompt`, `vit_coda_prompt`,
+  `vit_adapter*`) require their `base_model` to implement CLOVER-specific
+  hooks (`query_features`, `forward_tokens`/`forward(x, adapter=...)`)
+  that a raw timm ViT doesn't have. `resolve_base_model` happily
+  *constructs* a real timm model as a wrapper's base (registration/
+  resolution succeeds), but the wrapper's own forward pass would then
+  raise `AttributeError` -- confirmed by hand before deciding scope, not
+  guessed. Real timm usage is therefore only fully wired end-to-end for
+  "complete backbone" methods with a plain `forward(x) -> features)`, no
+  extra hooks -- SimpleCIL today. Splicing prompts/prefixes/adapters into
+  a real timm ViT's actual internals (patch embed, attention blocks) is
+  future work, not this phase's -- documented in `README.md`, every
+  shipped `configs/*.yaml`'s header comment, and
+  `tests/test_backbones_real_image.py`'s module docstring.
+- Verification: `tests/test_backbones_real_image.py` (new) proves the
+  literal DONE gate for real -- a real `clover run` (through `main(["run",
+  ...])`, not a hand-wired `Trainer` call) against a real, tiny,
+  hand-built `image_folder` fixture directory (P8's zero-network-access
+  pattern), first with SimpleCIL + a real timm backbone selected purely
+  via config (exercising the `method_cfg` fix, channel threading, and the
+  timm fallback together), then with L2P's own default backbone (proving
+  channel threading works for the wrapper-mechanism family too, without
+  overclaiming real-timm compatibility for it). All 9 methods' existing
+  isolated `build()` tests updated (`channels=1` added to each
+  hand-constructed `StreamInfo`, matching synthetic's real shape) --
+  confirmed zero behavior change for the default (synthetic, 1-channel)
+  path anywhere. `configs/*.yaml` header comments and `README.md`'s
+  known-gap note updated to reflect what's now actually true (channel
+  handling fixed; SimpleCIL alone can use a real pretrained timm ViT;
+  training hyperparameters remain untuned starting points either way).
+- Full suite: 454 tests (3 new in `test_backbones_real_image.py`), all
+  green; `ruff check clover tests`, `mypy clover/core clover/config`,
+  `clover smoke` (9/9) all green.
+- **P9 remains not ticked.** P10 removes one of its two blockers (the
+  backbone/channel gap); the other (the user's own Snellius access to
+  actually run `configs/matrix_full.yaml`, plus the explicitly-deferred
+  branch/tag mechanics for the `v1` branch/RC tag) is not something this
+  session can complete -- no GPU, no cluster credentials, and the user's
+  own prior instruction was "no git surgery" for branch/tag operations.
+  Once the user runs the matrix themselves and/or re-confirms the branch
+  mechanics, P9's checkbox can finally tick.

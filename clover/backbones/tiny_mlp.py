@@ -17,12 +17,14 @@ from clover.backbones import register_backbone
 class TinyMLP(nn.Module):
     """``Linear -> ReLU -> Linear`` feature extractor over flattened input."""
 
-    def __init__(self, input_size: int = 8, hidden_dim: int = 32, feature_dim: int = 16) -> None:
+    def __init__(
+        self, input_size: int = 8, in_chans: int = 1, hidden_dim: int = 32, feature_dim: int = 16
+    ) -> None:
         super().__init__()
         self.feature_dim = feature_dim
         self.net = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(input_size * input_size, hidden_dim),
+            nn.Linear(input_size * input_size * in_chans, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, feature_dim),
         )

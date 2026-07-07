@@ -49,7 +49,7 @@ class _FakeExperience:
 
 def _make_method() -> L2P:
     method = get_method("l2p")()
-    info = StreamInfo(dataset="synthetic", nb_experiences=2, total_classes=4, input_size=8)
+    info = StreamInfo(dataset="synthetic", nb_experiences=2, total_classes=4, input_size=8, channels=1)
     method.build(info, {"pool_size": 6, "prompt_length": 3, "top_k": 2})
     return method
 

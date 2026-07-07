@@ -127,12 +127,17 @@ class Trainer:
         train_dataset: CLDataset,
         test_dataset: CLDataset,
         config: RunConfig,
+        method_cfg: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.method = method
         self.benchmark = benchmark
         self.train_dataset = train_dataset
         self.test_dataset = test_dataset
         self.config = config
+        #: Method-level config overrides (e.g. ``backbone:``), resolved from
+        #: the user's YAML (P10: found never actually reaching build() --
+        #: this was hardcoded to {} unconditionally before).
+        self.method_cfg: Dict[str, Any] = method_cfg or {}
 
     def _checkpoint_path(self, task: int) -> str:
         return os.path.join(self.config.run_dir, f"ckpt_task{task:02d}.pt")
@@ -221,8 +226,9 @@ class Trainer:
             nb_experiences=self.benchmark.nb_experiences,
             total_classes=self.benchmark.total_classes,
             input_size=self.train_dataset.input_size,
+            channels=self.train_dataset.channels,
         )
-        self.method.build(stream_info, {})
+        self.method.build(stream_info, self.method_cfg)
 
         train_experiences = list(self.benchmark.train_stream)
         test_experiences = list(self.benchmark.test_stream)

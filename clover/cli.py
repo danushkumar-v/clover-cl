@@ -130,7 +130,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     method = get_method(resolved.method_name)()
     run_config = _build_run_config(resolved, run_dir, smoke=smoke)
 
-    r_matrix = Trainer(method, benchmark, train_dataset, test_dataset, run_config).run()
+    r_matrix = Trainer(
+        method, benchmark, train_dataset, test_dataset, run_config, method_cfg=resolved.method_cfg
+    ).run()
 
     print(f"run complete: {run_dir}")
     array = r_matrix.to_array()

@@ -42,7 +42,7 @@ class _FakeExperience:
 
 def _make_method() -> EASE:
     method = get_method("ease")()
-    info = StreamInfo(dataset="synthetic", nb_experiences=3, total_classes=6, input_size=8)
+    info = StreamInfo(dataset="synthetic", nb_experiences=3, total_classes=6, input_size=8, channels=1)
     method.build(info, {"depth": 2, "bottleneck_dim": 4})
     return method
 

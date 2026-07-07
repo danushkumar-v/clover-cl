@@ -43,7 +43,7 @@ class _FakeExperience:
 
 def _make_method() -> TUNA:
     method = get_method("tuna")(crct_epochs=3, ca_lr=5e-3, samples_per_class=8)
-    info = StreamInfo(dataset="synthetic", nb_experiences=3, total_classes=6, input_size=8)
+    info = StreamInfo(dataset="synthetic", nb_experiences=3, total_classes=6, input_size=8, channels=1)
     method.build(info, {"depth": 2, "bottleneck_dim": 4})
     return method
 

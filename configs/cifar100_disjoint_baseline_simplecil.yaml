@@ -1,10 +1,12 @@
 # Shipped example config (P9, SPEC §2/§9). NOTE:
-#   - Real training on any non-synthetic dataset currently crashes on the
-#     first batch: no method/backbone threads a channel count through, so
-#     TinyViT/TinyMLP assume 1-channel input (see PLAN.md's P10 phase).
-#     Until P10 lands, this config validates for shape/schema correctness
-#     only -- `clover preflight configs/<this file>` and
-#     `clover inspect configs/<this file>`, not a full `clover run`.
+#   - Real training on a real (3-channel) dataset now works correctly (P10
+#     fixed channel-count handling -- see PLAN.md; proven end-to-end in
+#     tests/test_backbones_real_image.py, using a real dataset that needs
+#     no network access to verify). This config's default backbone
+#     (tiny_mlp) is still a tiny, untrained, CPU-only stand-in.
+#   - SimpleCIL is the one method that can also use a real, pretrained
+#     timm ViT directly: override `method: {name: simplecil, backbone:
+#     vit_base_patch16_224, pretrained: true}` for a real accuracy run.
 #   - training.epochs/batch_size/optimizer are untuned starting points
 #     (matching SPEC's own §9 example), not verified against published
 #     accuracy -- that verification needs the user's own cluster access

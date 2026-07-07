@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 
 import torch.nn as nn
 
-from clover.backbones import get_backbone
+from clover.backbones.loader import resolve_base_model
 from clover.core.experience import Experience
 from clover.methods.base import CLMethod, StreamInfo, TrainContext
 from clover.methods.heads import IncrementalHead
@@ -37,10 +37,10 @@ class AdapterMethodBase(CLMethod):
         self._adapter_frozen = False
 
     def build(self, stream_info: StreamInfo, cfg: Dict[str, Any]) -> None:
-        backbone_cls = get_backbone(cfg.get("backbone", self.default_backbone))
         backbone_kwargs = {k: v for k, v in cfg.items() if k != "backbone"}
         backbone_kwargs.setdefault("input_size", stream_info.input_size)
-        self.backbone = backbone_cls(**backbone_kwargs)
+        backbone_kwargs.setdefault("in_chans", stream_info.channels)
+        self.backbone = resolve_base_model(cfg.get("backbone", self.default_backbone), **backbone_kwargs)
         feature_dim: int = self.backbone.feature_dim  # type: ignore[assignment]
         # Throwaway: only used to backprop through the adapter during the
         # first experience. Its trained values are never read afterward --

@@ -44,7 +44,7 @@ class _FakeExperience:
 
 def _make_method() -> RanPAC:
     method = get_method("ranpac")()
-    info = StreamInfo(dataset="synthetic", nb_experiences=2, total_classes=4, input_size=8)
+    info = StreamInfo(dataset="synthetic", nb_experiences=2, total_classes=4, input_size=8, channels=1)
     method.build(info, {"depth": 2, "bottleneck_dim": 4})
     return method
 

@@ -35,6 +35,7 @@ class StreamInfo:
     nb_experiences: int
     total_classes: int
     input_size: int
+    channels: int
 
 
 @dataclass

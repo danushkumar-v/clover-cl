@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 import torch
 import torch.nn as nn
 
-from clover.backbones import get_backbone
+from clover.backbones.loader import resolve_base_model
 from clover.core.experience import Experience
 from clover.methods.base import CLMethod, StreamInfo, TrainContext
 from clover.methods.heads import IncrementalHead
@@ -47,10 +47,10 @@ class PromptMethodBase(CLMethod):
         self.head: Optional[IncrementalHead] = None
 
     def build(self, stream_info: StreamInfo, cfg: Dict[str, Any]) -> None:
-        backbone_cls = get_backbone(cfg.get("backbone", self.default_backbone))
         backbone_kwargs = {k: v for k, v in cfg.items() if k != "backbone"}
         backbone_kwargs.setdefault("input_size", stream_info.input_size)
-        backbone: nn.Module = backbone_cls(**backbone_kwargs)
+        backbone_kwargs.setdefault("in_chans", stream_info.channels)
+        backbone: nn.Module = resolve_base_model(cfg.get("backbone", self.default_backbone), **backbone_kwargs)
         self.backbone = backbone
         feature_dim: int = backbone.feature_dim  # type: ignore[assignment]
         self.head = IncrementalHead(feature_dim, cosine=False)

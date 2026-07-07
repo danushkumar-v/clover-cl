@@ -24,6 +24,10 @@ _PATTERN_SEED = 1234
 @register_dataset("synthetic")
 class SyntheticDataset(CLDataset):
     input_size = 8
+    #: No channel dim at all in the underlying data (plain (H, W) arrays) --
+    #: TinyViT's patch_tokens already special-cases this by unsqueezing one
+    #: in; TinyMLP's flatten math treats it as in_chans=1.
+    channels = 1
     NUM_CLASSES = 20
     SAMPLES_PER_CLASS = 32
     NOISE_STD = 0.3

@@ -50,7 +50,7 @@ class _FakeExperience:
 
 def _make_method() -> CODAPrompt:
     method = get_method("coda_prompt")()
-    info = StreamInfo(dataset="synthetic", nb_experiences=2, total_classes=4, input_size=8)
+    info = StreamInfo(dataset="synthetic", nb_experiences=2, total_classes=4, input_size=8, channels=1)
     method.build(info, {"pool_size": 4, "layers": (0, 1)})
     return method
 

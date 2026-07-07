@@ -18,6 +18,10 @@ class CLDataset(ABC):
     #: Native input resolution this dataset provides (e.g. 224 for ViT-ready
     #: datasets); backbones/config read this instead of hard-coding a size.
     input_size: int = 32
+    #: Number of image channels this dataset's samples carry (P10) --
+    #: backbones read this instead of hard-coding 1 or 3. 3 is correct for
+    #: every real (RGB) dataset; ``synthetic`` overrides to 1.
+    channels: int = 3
     #: True when items are file paths, False when arrays/tensors are held in memory.
     use_path: bool = False
 

@@ -12,7 +12,7 @@ from clover.methods.simple_cil import SimpleCIL
 
 def _make_method() -> SimpleCIL:
     method = get_method("simplecil")()
-    info = StreamInfo(dataset="synthetic", nb_experiences=2, total_classes=4, input_size=8)
+    info = StreamInfo(dataset="synthetic", nb_experiences=2, total_classes=4, input_size=8, channels=1)
     method.build(info, {})
     return method
 
