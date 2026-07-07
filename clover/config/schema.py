@@ -60,16 +60,22 @@ class OptimizerConfig:
 class TrainingSection:
     """``amp`` is validated but only collapsed to a bool for
     ``TrainContext.amp`` right now -- no autocast wrapping exists anywhere
-    yet (no gradient-trained method exists), so finer bf16-vs-fp16 dtype
-    handling is deferred to whichever phase adds one.
+    yet (still true as of P9, even though L2P/DualPrompt/CODA-Prompt are
+    real gradient-trained methods since P5: nothing in ``Trainer``/any
+    method actually wraps a forward/backward pass in ``torch.autocast``),
+    so finer bf16-vs-fp16 dtype handling is deferred to whichever phase
+    adds one. ``cudnn_benchmark`` (SPEC §11) is real and set on the
+    torch backend at run start (``clover/training/trainer.py
+    :_seed_everything``) -- unlike ``amp``, it isn't a no-op.
     """
 
     epochs: int = 1
     batch_size: int = 32
     optimizer: Optional[OptimizerConfig] = None
     amp: str = "none"
+    cudnn_benchmark: bool = False
 
-    _ALLOWED_KEYS = frozenset({"epochs", "batch_size", "optimizer", "amp"})
+    _ALLOWED_KEYS = frozenset({"epochs", "batch_size", "optimizer", "amp", "cudnn_benchmark"})
 
     def validate(self) -> None:
         if self.epochs < 1:
@@ -89,6 +95,7 @@ class TrainingSection:
             batch_size=int(raw.get("batch_size", 32)),
             optimizer=optimizer,
             amp=str(raw.get("amp", "none")),
+            cudnn_benchmark=bool(raw.get("cudnn_benchmark", False)),
         )
         section.validate()
         return section
@@ -99,6 +106,7 @@ class TrainingSection:
             "batch_size": self.batch_size,
             "optimizer": self.optimizer.to_dict() if self.optimizer else None,
             "amp": self.amp,
+            "cudnn_benchmark": self.cudnn_benchmark,
         }
 
 

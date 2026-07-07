@@ -5,6 +5,7 @@ run-matrix (SPEC §9, §10-§11).
 from __future__ import annotations
 
 import argparse
+import logging
 import math
 import os
 import sys
@@ -13,6 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Optional
 
+import torch
 from torchvision import transforms
 
 from clover.config import MatrixSection, ResolvedConfig, load_yaml, resolve_config
@@ -57,18 +59,40 @@ def _run_dir_for(resolved: ResolvedConfig, config_path: str) -> str:
     return os.path.join(resolved.run.output_dir, name)
 
 
-def _build_run_config(resolved: ResolvedConfig, run_dir: str) -> RunConfig:
+def _build_run_config(resolved: ResolvedConfig, run_dir: str, smoke: bool = False) -> RunConfig:
     optimizer = resolved.training.optimizer
+    # The smoke profile is CPU-only by definition (SPEC R7) regardless of
+    # what hardware happens to run it; a real run auto-detects a GPU if one
+    # is present -- there is otherwise no way to ever select one (this was
+    # hardcoded to "cpu" unconditionally until P9, silently blocking every
+    # real cluster run).
+    device = "cpu" if smoke else ("cuda" if torch.cuda.is_available() else "cpu")
     return RunConfig(
         run_dir=run_dir,
         seed=resolved.run.seed,
         batch_size=resolved.training.batch_size,
-        device="cpu",
+        device=device,
         amp=resolved.training.amp != "none",
         optimizer_name=optimizer.name if optimizer else "adam",
         optimizer_lr=optimizer.lr if optimizer else 1e-3,
         epochs=resolved.training.epochs,
+        cudnn_benchmark=resolved.training.cudnn_benchmark,
     )
+
+
+def _attach_run_log_handler(run_dir: str) -> None:
+    """Write ``TrainContext.logger`` output into ``<run_dir>/log.txt``
+    (SPEC §11's run-artifact layout). Clears any handler left by a prior
+    in-process ``main()`` call first -- otherwise repeated calls within one
+    process (tests, or any future in-process matrix dispatch) would
+    accumulate handlers and leak log lines into the wrong run's file."""
+    logger = logging.getLogger("clover.training")
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+    logger.setLevel(logging.INFO)
+    handler = logging.FileHandler(os.path.join(run_dir, "log.txt"))
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(handler)
 
 
 def _error_message(exc: BaseException) -> str:
@@ -80,12 +104,14 @@ def _error_message(exc: BaseException) -> str:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    smoke = args.profile == "smoke"
     raw = load_yaml(args.config)
-    resolved = resolve_config(raw, smoke=(args.profile == "smoke"))
+    resolved = resolve_config(raw, smoke=smoke)
 
     run_dir = _run_dir_for(resolved, args.config)
     os.makedirs(run_dir, exist_ok=True)
     resolved.save(os.path.join(run_dir, "config_resolved.yaml"))
+    _attach_run_log_handler(run_dir)
 
     dataset_cls = get_dataset(resolved.stream_spec.dataset)
     dataset_kwargs: dict[str, Any] = {"root": resolved.stream_spec.data_root}
@@ -100,8 +126,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     benchmark = build_benchmark(
         resolved.stream_spec, info, train_dataset.get_class_to_indices(), test_dataset.get_class_to_indices()
     )
+    benchmark.save_manifest(os.path.join(run_dir, "manifest.json"))
     method = get_method(resolved.method_name)()
-    run_config = _build_run_config(resolved, run_dir)
+    run_config = _build_run_config(resolved, run_dir, smoke=smoke)
 
     r_matrix = Trainer(method, benchmark, train_dataset, test_dataset, run_config).run()
 

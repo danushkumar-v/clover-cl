@@ -82,6 +82,7 @@ class RunConfig:
     optimizer_name: str = "adam"
     optimizer_lr: float = 1e-3
     epochs: int = 1
+    cudnn_benchmark: bool = False
 
 
 #: The one place optimizer names are mapped to classes -- clover/config's
@@ -90,12 +91,17 @@ class RunConfig:
 OPTIMIZER_FACTORIES = {"adam": torch.optim.Adam, "sgd": torch.optim.SGD, "adamw": torch.optim.AdamW}
 
 
-def _seed_everything(seed: int) -> None:
+def _seed_everything(seed: int, cudnn_benchmark: bool = False) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
+    # SPEC §11: determinism on by default, cudnn_benchmark opt-in (recorded
+    # via TrainingSection.cudnn_benchmark in config_resolved.yaml). No-op on
+    # CPU-only runs -- these flags only affect cudnn's GPU kernel selection.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = cudnn_benchmark
 
 
 def _atomic_write_json(path: str, data: Dict[str, Any]) -> None:
@@ -198,7 +204,7 @@ class Trainer:
 
     def run(self) -> RMatrix:
         os.makedirs(self.config.run_dir, exist_ok=True)
-        _seed_everything(self.config.seed)
+        _seed_everything(self.config.seed, self.config.cudnn_benchmark)
 
         device = torch.device(self.config.device)
         optimizer_cls = OPTIMIZER_FACTORIES[self.config.optimizer_name]
@@ -248,6 +254,10 @@ class Trainer:
             history = PerClassHistory.from_dict(checkpoint["history"])
 
         self._write_status("running", resume_from - 1)
+        ctx.logger.info(
+            f"run starting: {self.benchmark.nb_experiences} experience(s), "
+            f"resuming from experience {resume_from}"
+        )
 
         evaluator = PerClassEvaluator(self.method.classifier(), self.test_dataset, device)
         # Only trust rows for tasks the checkpoint confirms are actually
@@ -309,6 +319,8 @@ class Trainer:
                 self._checkpoint_path(exp.task_label),
             )
             self._write_status("running", exp.task_label)
+            ctx.logger.info(f"experience {exp.task_label} done")
 
         self._write_status("done", self.benchmark.nb_experiences - 1)
+        ctx.logger.info("run complete")
         return r_matrix

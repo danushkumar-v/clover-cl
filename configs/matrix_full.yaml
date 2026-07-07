@@ -1,0 +1,49 @@
+# Full 9-method x 7-scenario x 3-seed matrix on CIFAR-100 (P9, SPEC §11.1):
+#   sbatch scripts/slurm_run.sh configs/matrix_full.yaml
+# NOTE:
+#   - Real training on any non-synthetic dataset currently crashes on the
+#     first batch: no method/backbone threads a channel count through, so
+#     TinyViT/TinyMLP assume 1-channel input (see PLAN.md's P10 phase).
+#     This matrix is not runnable end-to-end until P10 lands. Validate its
+#     shape/schema locally first: `clover preflight` resolves and checks
+#     cell 0 automatically when `clover run-matrix` starts.
+#   - init_cls/increment (10/10) are shared across every cell regardless of
+#     method/scenario -- verified every scenario's own defaults
+#     (n_anchors/n_shifted/anchor_task/overlap_fraction) fit within a
+#     10-experience, 10-class-per-task CIFAR-100 stream without needing
+#     per-scenario scenario_params overrides.
+#   - training hyperparameters are untuned starting points (SPEC §9's own
+#     example values), shared across every method -- real published-accuracy
+#     verification needs the user's own cluster access (see docs/methods.md).
+#   - 3 seeds is an editable default, not a mandated count -- adjust before
+#     submitting if compute budget calls for fewer/more.
+methods:
+  - simplecil
+  - l2p
+  - dualprompt
+  - coda_prompt
+  - aper_adapter
+  - ranpac
+  - ease
+  - mos
+  - tuna
+scenarios:
+  - disjoint_baseline
+  - exact_replay
+  - partial_overlap
+  - long_range_revisit
+  - mid_range_revisit
+  - cumulative_drift
+  - distribution_shift
+datasets:
+  - cifar100
+seeds: [1, 2, 3]
+stream:
+  init_cls: 10
+  increment: 10
+training:
+  epochs: 5
+  batch_size: 16
+  optimizer: {name: adam, lr: 1.875e-3}
+  amp: none
+output_dir: runs/matrix_full

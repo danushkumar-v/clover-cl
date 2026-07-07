@@ -19,6 +19,7 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - [x] **P7 — Metrics + reporting + matrix** (SPEC §10): per-class evaluator finalized, standard (A_t/AIA/BWT/FWT/Forgetting) + CLOVER (RAG, Repetition Gain, Anchor/Long-Range Retention, echo-aware) metrics ported with fixture tests; `clover report`; `run-matrix` orchestrator (resume/retry/stale/GPU-pool). DONE: hand-computed metric fixtures green; two-method synthetic demo report renders in CI; matrix resume test green. **GPU-pool parallelism deferred (sequential dispatch only) — see Log.**
 - [x] **P8 — Datasets + extras + docs** (SPEC §7, §8, §13): CUB-200, ImageNet-R/A, OmniBenchmark, VTAB wrappers + staging docs; `image_folder` config-only dataset; scenario extras as capacity allows; docs/concepts.md, docs/extending.md (method/dataset/scenario/backbone worked examples). DONE: built-in metadata smoke tests green; a tutorial-followed custom dataset runs a full smoke benchmark without touching core.
 - [ ] **P9 — Release candidate** (SPEC §13–§14): docs/MIGRATION.md (legacy API → v2 configs), README (quickstart, smoke→SLURM workflow, scenario table, results, citations + no-copied-code attribution note); full matrix on cluster; tag RC. DONE: full 9-method × 6-scenario matrix reproduced on Snellius from shipped configs; README workflow verified end-to-end; `main` preserved as `v1` branch.
+- [ ] **P10 — Backbone real-image support** (not in SPEC's original phase table; added 2026-07-07, found while scoping P9 — see Log): `StreamInfo`/`DatasetInfo` gain a channel-count field; `TinyViT`/`TinyMLP` and all 9 methods' `build()` thread it through instead of hardcoding 1 channel; at least one method wired to `clover/backbones/loader.py:resolve_base_model` with a real timm base-model name as a worked example of the config-selectable-backbone path SPEC §6.4 describes but no method actually exercises yet. DONE: a real (non-synthetic) dataset trains one experience without a shape/channel error, on CPU, for at least one method — the existing test suite's style, no cluster needed for this gate. Real per-method accuracy tuning against a real pretrained backbone stays cluster-side, same as every dataset's CIFAR-100-vs-published-accuracy verification throughout this project.
 
 ## Log
 
@@ -903,3 +904,96 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
 - Full suite: 437 tests, all green (`ruff check clover tests`, `mypy
   clover/core clover/config`, `clover smoke` 9/9 also green). P8 fully
   done -- next unchecked phase: P9 (release candidate).
+
+- **2026-07-07, P9 (not ticked -- see below): docs/configs/small
+  cluster-readiness fixes done; the actual Snellius matrix run and RC
+  tagging remain genuinely outstanding.** Per explicit user direction this
+  session: no git surgery (no `v1` branch creation, no merge into `main`,
+  no RC tag, no push -- everything stays local on `v2`, committed only);
+  the shipped matrix/README scenario table treats P8's `distribution_shift`
+  as a full 7th member alongside the 6 core scenarios, not a footnote.
+- **A real blocker was found while scoping this, not routed around
+  silently, per explicit user instruction: document it and spin it off as
+  a new P10 phase (added above) rather than silently expanding P9 or
+  silently shipping non-functional configs.** No method or backbone
+  currently threads a channel count through at all -- every method's
+  `build()` calls `backbone_cls(input_size=stream_info.input_size)` only,
+  and `TinyViT`/`TinyMLP` both hard-default to 1 channel (sized for the 8x8
+  grayscale `synthetic` dataset); `StreamInfo`/`DatasetInfo` have no field
+  to even carry a channel count. A shipped config for *any* real dataset
+  (CIFAR-100, the 5 `ImageFolder` built-ins, `image_folder`) crashes on the
+  first training batch, on any hardware -- cluster included. P8 already
+  hit exactly this crash shape once (`image_folder` + SimpleCIL +
+  `tiny_mlp`) and reasoned it out of that phase's scope at the time; P9
+  surfaced it as a repo-wide gap, not an `image_folder`-specific one.
+- **Two smaller, genuinely P9-scoped gaps fixed before writing docs that
+  describe the cluster workflow as real**: (1) `clover/cli.py
+  :_build_run_config` hardcoded `device="cpu"` unconditionally -- no
+  config or flag could ever select a GPU, even via `sbatch
+  scripts/slurm_run.sh` on a real GPU node, which would have made the
+  entire cluster-workflow premise silently false. Fixed: auto-detects
+  `cuda` when available, except the smoke profile, which stays CPU-only
+  regardless of hardware (SPEC R7's explicit wording). (2) SPEC §11's
+  run-artifact layout lists `manifest.json` and `log.txt`; neither was
+  ever written (`Benchmark.save_manifest` existed but nothing called it;
+  `TrainContext.logger` was plumbed but nothing ever logged through it).
+  Fixed: `cmd_run` now calls `benchmark.save_manifest(...)` and attaches a
+  `logging.FileHandler` to `"clover.training"` (cleared and re-attached
+  per run, so repeated in-process `main()` calls -- tests, mainly -- don't
+  accumulate handlers or leak lines into the wrong run's file); `Trainer
+  .run()` gained a handful of `ctx.logger.info(...)` calls at natural
+  lifecycle points so `log.txt` isn't just an empty artifact. Also added
+  SPEC §11's `cudnn.deterministic`-on-by-default /
+  `cudnn_benchmark`-opt-in-and-recorded flags (`_seed_everything`,
+  `TrainingSection.cudnn_benchmark`) -- grouped with the device fix since
+  both are "this codebase never actually prepared to run on a GPU"
+  symptoms, discovered together.
+- **`configs/` directory created (didn't exist before this session)**: 7
+  single-run example configs (one per scenario, on `cifar100` -- the one
+  real dataset needing zero manual staging, method varied across files for
+  range) plus `configs/matrix_full.yaml` (9 methods x 7 scenarios x 3
+  seeds, all shared `init_cls=10/increment=10` since CIFAR-100's 100
+  classes and every scenario's own defaults fit that without per-scenario
+  overrides). Checked first: no method's `build()` reads any `cfg.get(...)`
+  key except `"backbone"` -- SPEC §9's own illustrative
+  `prompt_pool_size`/`prompt_length` example keys are aspirational, not
+  implemented (already logged in this file's P4 entry as a deferred
+  per-method-schema gap) -- so shipped `method:` blocks are just `{name:
+  ...}`, never a fake hyperparameter key that would silently do nothing.
+  `amp: none` (not `bf16`) for the same honesty reason -- amp is still
+  validated-but-inert (P4's log entry, still true, noted again in
+  `TrainingSection`'s docstring). Verified entirely offline: a new
+  `tests/test_configs_shipped.py` uses `patched_cifar100` to run every
+  shipped config through `clover preflight`/`clover inspect`, and resolves
+  all 189 `matrix_full.yaml` cells through the planner -- proving every
+  shipped config is schema-valid and produces a feasible plan without
+  requiring the P10 fix or any real download.
+- **Docs rewritten for v2, replacing stale v1 content wholesale rather
+  than patching it**: `README.md` (was entirely v1 -- `OverlapDataManager`,
+  PILOT drop-in-compatibility claims, v0.2 badges, links to
+  `clover/core/README.md`/`clover/scenarios/README.md` which don't exist in
+  v2) and `docs/MIGRATION.md` (the existing file mapped *this repo's own*
+  v0.1->v0.2 internal API evolution -- both of which are what this session
+  calls "v1" -- not the real v1->v2 migration SPEC asks for; rewritten from
+  the real `OverlapDataManager`/`OverlapSpec`/per-scenario `build_spec()`
+  code read via `git show main:...`, the same sanctioned-reference pattern
+  P8 used). New `CONTRIBUTING.md` (plugin checklists, the
+  no-per-method-loss-hacks rule, test requirements). Both README and
+  MIGRATION initially referenced a `v1` branch that doesn't exist yet
+  (caught before commit, given this session's explicit no-git-surgery
+  scope) -- fixed to say "currently on `main`, to become the `v1` branch at
+  release."
+- Full suite: 451 tests (14 new: 7 in `test_cli_run.py` for
+  device-auto-detect/cudnn/manifest/log.txt, 1 `cudnn_benchmark` round
+  -trip in `test_config_schema.py`, 2 cudnn-flag tests in `test_trainer.py`,
+  4 in the new `test_configs_shipped.py`), all green; `ruff check clover
+  tests`, `mypy clover/core clover/config`, `clover smoke` (9/9) all green.
+- **P9's checkbox stays unticked.** Its literal DONE criterion ("full
+  9-method x 6-scenario matrix reproduced on Snellius from shipped
+  configs") is genuinely unmet: it needs both P10 (the backbone/channel
+  fix) to land and the user's own Snellius access to actually run
+  `configs/matrix_full.yaml`. Everything locally verifiable this session
+  (docs accuracy, config schema-validity, the device/manifest/log/cudnn
+  fixes, no regressions) is done and tested; the remainder is tracked
+  precisely, not silently marked done. Next: P10, then return to P9's
+  outstanding cluster-run step.

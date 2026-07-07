@@ -8,12 +8,14 @@ import os
 import tempfile
 
 import numpy as np
+import torch
 
 from clover.core.spec import DatasetInfo, StreamSpec
 from clover.core.stream import build_benchmark
 from clover.datasets.synthetic import SyntheticDataset
 from clover.methods import get_method
 from clover.training import RunConfig, Trainer
+from clover.training.trainer import _seed_everything
 
 
 def _make_benchmark():
@@ -67,3 +69,25 @@ def test_trainer_r_matrix_is_finite_and_above_chance_on_diagonal():
     for t in range(n):
         for te in range(t + 1, n):
             assert math.isnan(array[te, t])  # never-evaluated cells stay NaN
+
+
+def test_seed_everything_sets_cudnn_flags():
+    _seed_everything(42, cudnn_benchmark=False)
+    assert torch.backends.cudnn.deterministic is True
+    assert torch.backends.cudnn.benchmark is False
+
+    _seed_everything(42, cudnn_benchmark=True)
+    assert torch.backends.cudnn.deterministic is True
+    assert torch.backends.cudnn.benchmark is True
+
+
+def test_trainer_run_threads_cudnn_benchmark_from_run_config(tmp_path):
+    benchmark, train_ds, test_ds = _make_benchmark()
+    method = get_method("simplecil")()
+    run_config = RunConfig(run_dir=str(tmp_path), seed=42, cudnn_benchmark=True)
+
+    try:
+        Trainer(method, benchmark, train_ds, test_ds, run_config).run()
+        assert torch.backends.cudnn.benchmark is True
+    finally:
+        _seed_everything(42, cudnn_benchmark=False)  # restore the default for later tests

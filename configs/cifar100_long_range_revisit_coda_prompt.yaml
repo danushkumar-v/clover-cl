@@ -1,0 +1,28 @@
+# Shipped example config (P9, SPEC §2/§9). NOTE:
+#   - Real training on any non-synthetic dataset currently crashes on the
+#     first batch: no method/backbone threads a channel count through, so
+#     TinyViT/TinyMLP assume 1-channel input (see PLAN.md's P10 phase).
+#     Until P10 lands, this config validates for shape/schema correctness
+#     only -- `clover preflight configs/<this file>` and
+#     `clover inspect configs/<this file>`, not a full `clover run`.
+#   - training.epochs/batch_size/optimizer are untuned starting points
+#     (matching SPEC's own §9 example), not verified against published
+#     accuracy -- that verification needs the user's own cluster access
+#     (see docs/methods.md).
+run:
+  name: cifar100_long_range_revisit_coda_prompt
+  seed: 1993
+  output_dir: runs/
+stream:
+  dataset: cifar100
+  scenario: long_range_revisit
+  init_cls: 10
+  increment: 10
+  stream_seed: 42
+method:
+  name: coda_prompt
+training:
+  epochs: 5
+  batch_size: 16
+  optimizer: {name: adam, lr: 1.875e-3}
+  amp: none

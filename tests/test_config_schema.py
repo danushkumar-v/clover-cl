@@ -43,6 +43,13 @@ def test_training_section_defaults():
     assert section.batch_size == 32
     assert section.optimizer is None
     assert section.amp == "none"
+    assert section.cudnn_benchmark is False
+
+
+def test_training_section_cudnn_benchmark_round_trips():
+    section = TrainingSection.from_dict({"cudnn_benchmark": True})
+    assert section.cudnn_benchmark is True
+    assert TrainingSection.from_dict(section.to_dict()) == section
 
 
 def test_training_section_rejects_bad_amp():
