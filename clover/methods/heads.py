@@ -45,7 +45,9 @@ class IncrementalHead(nn.Module):
         if new_num_classes <= self.num_classes:
             return
         old_weight = self.weight.data
-        new_weight = torch.zeros(new_num_classes, self.feature_dim, dtype=old_weight.dtype)
+        new_weight = torch.zeros(
+            new_num_classes, self.feature_dim, dtype=old_weight.dtype, device=old_weight.device
+        )
         new_weight[: old_weight.shape[0]] = old_weight
         nn.init.normal_(new_weight[old_weight.shape[0] :], std=0.01)
         self.weight = nn.Parameter(new_weight)

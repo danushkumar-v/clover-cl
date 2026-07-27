@@ -1121,3 +1121,42 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
   own prior instruction was "no git surgery" for branch/tag operations.
   Once the user runs the matrix themselves and/or re-confirms the branch
   mechanics, P9's checkbox can finally tick.
+
+- **2026-07-27, pre-cluster readiness audit (before the user's first real
+  Snellius submission).** A code-inspection sweep of every path the GPU
+  job will exercise -- none of this code had ever executed on CUDA -- found
+  and fixed three device bugs plus two workflow blockers:
+  1. **`losses.py:masked_logits`**: `ids_to_column_mask` builds its bool
+     mask on CPU (it has no tensor to inherit a device from) and
+     `masked_fill` requires a same-device mask -- every gradient-trained
+     method (8 of 9) would have crashed on its first CUDA batch. Fixed
+     with `.to(logits.device)` at the single choke point.
+  2. **`classifier_alignment.py`**: `torch.randn(..., generator=...)`
+     draws on CPU (torch.Generator is CPU-only) then multiplied against
+     CUDA-resident class stats; targets built on CPU vs. CUDA logits in
+     the CE. MOS/TUNA would have crashed at their first alignment step.
+     Fixed: `z.to(mean.device)`, `targets_t.to(features_t.device)` --
+     the CPU draw is kept deliberately (deterministic, device-independent).
+  3. **`heads.py:IncrementalHead.expand_to`**: missing
+     `device=old_weight.device` (the other two heads already had it) --
+     MOS/TUNA call `.to(device)` *before* `expand_to`, so the expanded
+     head landed on CPU. Prompt/adapter families were safe only by
+     call-order luck; now safe by construction.
+  4. **`scripts/slurm_run.sh`** ran `clover run` unconditionally, but the
+     documented matrix submission needs `clover run-matrix --confirm`
+     (batch jobs have no stdin; the interactive prompt would die with
+     EOFError). Now auto-detects a top-level `methods:` key and dispatches
+     accordingly; Snellius account/partition filled in.
+  5. **New `cifar224` dataset + `configs/matrix_simplecil_vitb16.yaml`**:
+     `cifar100` is 32x32, but a real pretrained ViT-B/16 expects 224 --
+     the v1 `cifar224` convention (augment at 32, Resize to 224) ported so
+     the one real-pretrained-backbone run v2 can honestly make (SimpleCIL,
+     per P10's documented limitation) is actually launchable. 21 cells
+     (7 scenarios x 3 seeds).
+  CUDA fixes are code-inspection-verified only (no local GPU, unavoidably);
+  the submission instructions therefore order a 1-cell GPU pilot before
+  the full matrix. Scientific framing note recorded for the presentation:
+  `matrix_full.yaml` (tiny random backbones) validates the framework
+  end-to-end on the cluster but its accuracies are not method comparisons;
+  the real 9-method pretrained-backbone comparison remains
+  `clover-pilot-bench`'s completed v1 CIFAR-100 results.

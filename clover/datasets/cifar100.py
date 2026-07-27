@@ -70,3 +70,29 @@ class CIFAR100Dataset(CLDataset):
     @property
     def common_trsf(self) -> List[Any]:
         return list(_COMMON_TRSF)
+
+
+@register_dataset("cifar224")
+class CIFAR224Dataset(CIFAR100Dataset):
+    """CIFAR-100 upscaled to 224x224 for pretrained-ViT backbones (the v1
+    ``cifar224`` convention): CIFAR-native augmentation runs at 32x32, then
+    the image is resized to 224 before tensor conversion. Use this (not
+    ``cifar100``) whenever ``backbone:`` points at a real pretrained timm
+    ViT -- 224 is what those checkpoints' patch/position embeddings expect.
+    """
+
+    input_size: int = 224
+
+    @property
+    def train_trsf(self) -> List[Any]:
+        return [
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=63 / 255),
+            transforms.Resize(224),
+            transforms.ToTensor(),
+        ]
+
+    @property
+    def test_trsf(self) -> List[Any]:
+        return [transforms.Resize(224), transforms.ToTensor()]

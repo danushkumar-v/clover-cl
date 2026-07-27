@@ -1,0 +1,40 @@
+# SimpleCIL with a REAL pretrained ViT-B/16 (timm) on CIFAR-100@224 --
+# the one method whose plain forward(x)->features contract works with a raw
+# timm model today (see README's known-gap note; the prompt/adapter wrapper
+# mechanisms still need a TinyViT-shaped base).
+#
+#   sbatch scripts/slurm_run.sh configs/matrix_simplecil_vitb16.yaml
+#
+# This is the v2 run whose accuracies are scientifically meaningful
+# (pretrained PTM backbone, the setting the CLOVER thesis targets).
+# SimpleCIL is closed-form (no gradient epochs), so all 21 cells are fast.
+#
+# NOTE: prefetch the timm weights on the login node before submitting
+# (compute nodes shouldn't spend GPU time downloading):
+#   python -c "import timm; timm.create_model('vit_base_patch16_224', pretrained=True)"
+methods:
+  - simplecil
+method_overrides:
+  simplecil:
+    backbone: vit_base_patch16_224
+    pretrained: true
+scenarios:
+  - disjoint_baseline
+  - exact_replay
+  - partial_overlap
+  - long_range_revisit
+  - mid_range_revisit
+  - cumulative_drift
+  - distribution_shift
+datasets:
+  - cifar224
+seeds: [1, 2, 3]
+stream:
+  init_cls: 10
+  increment: 10
+training:
+  epochs: 1          # SimpleCIL is closed-form; epochs are unused by it
+  batch_size: 64
+  optimizer: {name: adam, lr: 1.875e-3}
+  amp: none
+output_dir: runs/matrix_simplecil_vitb16

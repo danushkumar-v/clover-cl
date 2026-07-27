@@ -46,6 +46,7 @@ def test_dataset_registry_has_the_expected_p2_p8_builtins() -> None:
     assert set(list_datasets()) == {
         "synthetic",
         "cifar100",
+        "cifar224",
         "cub200",
         "imagenet_r",
         "imagenet_a",

@@ -43,3 +43,21 @@ def test_transform_properties_are_lists(patched_cifar100):
     assert isinstance(ds.train_trsf, list) and ds.train_trsf
     assert isinstance(ds.test_trsf, list) and ds.test_trsf
     assert isinstance(ds.common_trsf, list) and ds.common_trsf
+
+
+def test_cifar224_composed_transforms_produce_224_tensors(patched_cifar100):
+    from torchvision import transforms as T
+
+    from clover.datasets.cifar100 import CIFAR224Dataset
+
+    ds = CIFAR224Dataset(root="./data", train=True)
+    assert ds.input_size == 224
+    composed_train = T.Compose([*ds.train_trsf, *ds.common_trsf])
+    composed_test = T.Compose([*ds.test_trsf, *ds.common_trsf])
+    ds_train = CIFAR224Dataset(root="./data", train=True, transform=composed_train)
+    ds_test = CIFAR224Dataset(root="./data", train=False, transform=composed_test)
+    image, label = ds_train[0]
+    assert image.shape == (3, 224, 224)
+    image, _ = ds_test[0]
+    assert image.shape == (3, 224, 224)
+    assert isinstance(label, int)

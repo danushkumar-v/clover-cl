@@ -1,0 +1,28 @@
+# 1-cell GPU pilot (run this BEFORE any matrix submission -- it exercises
+# every CUDA code path that was fixed in the 2026-07-27 readiness audit in
+# one short run):
+#   - masked_logits column-mask device (all gradient methods)
+#   - classifier-alignment Gaussian resampling device (MOS/TUNA only)
+#   - IncrementalHead.expand_to device (MOS/TUNA call order)
+#   - checkpoint save/resume on CUDA
+#
+#   sbatch --time=00:30:00 scripts/slurm_run.sh configs/pilot_gpu_mos.yaml
+#
+# Expected: exits 0, runs/pilot_gpu_mos/status.json says "done", and
+# per_task.csv has finite (non-NaN) A_t/AIA rows for all 10 tasks.
+run:
+  name: pilot_gpu_mos
+  seed: 1
+  output_dir: runs/
+stream:
+  dataset: cifar100
+  scenario: cumulative_drift   # same-id anchors: the revisit-safe loss path
+  init_cls: 10
+  increment: 10
+method:
+  name: mos
+training:
+  epochs: 1                    # pilot: shape/device correctness, not accuracy
+  batch_size: 64
+  optimizer: {name: adam, lr: 1.875e-3}
+  amp: none

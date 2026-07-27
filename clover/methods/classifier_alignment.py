@@ -52,7 +52,9 @@ def _sample_gaussian(
     mean: torch.Tensor, cov: torch.Tensor, n: int, generator: torch.Generator
 ) -> torch.Tensor:
     chol = torch.linalg.cholesky(cov)
-    z = torch.randn(n, mean.shape[0], generator=generator)
+    # Draw on CPU (torch.Generator is a CPU generator -- keeps the draw
+    # deterministic and device-independent), then move to the stats' device.
+    z = torch.randn(n, mean.shape[0], generator=generator).to(mean.device)
     return mean.unsqueeze(0) + z @ chol.t()
 
 
@@ -80,7 +82,7 @@ def gaussian_resample_finetune(
             features.append(_sample_gaussian(mean, cov, samples_per_class, generator))
             targets.append(torch.full((samples_per_class,), class_id, dtype=torch.long))
         features_t = torch.cat(features, dim=0)
-        targets_t = torch.cat(targets, dim=0)
+        targets_t = torch.cat(targets, dim=0).to(features_t.device)
 
         optimizer.zero_grad()
         logits = head(features_t)

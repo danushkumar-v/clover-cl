@@ -50,7 +50,9 @@ def masked_logits(
     else:
         raise ValueError(f"kind must be 'new' or 'seen', got {kind!r}.")
 
-    masked = logits.masked_fill(~logit_mask, float("-inf"))
+    # masked_fill requires the mask on logits' device; ids_to_column_mask
+    # builds on CPU (it has no tensor to inherit a device from).
+    masked = logits.masked_fill(~logit_mask.to(logits.device), float("-inf"))
     return masked, sample_mask
 
 
