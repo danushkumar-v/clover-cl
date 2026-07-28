@@ -27,3 +27,5 @@ SPEC.md
 # planner), and would add ~85MB of image-index JSON across a full matrix.
 *.pt
 runs/**/manifest.json
+slurm-*.out
+slurm-*.err
