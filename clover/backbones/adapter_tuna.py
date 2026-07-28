@@ -110,11 +110,17 @@ class TunaAdapterViT(nn.Module):
 
     def grow(self) -> None:
         """Freeze the current (most recent) adapter, if any, then allocate
-        a fresh trainable one for the upcoming experience."""
+        a fresh trainable one for the upcoming experience.
+
+        The new adapter is created on the base model's device: grow() runs
+        in ``before_experience`` after ``.to(ctx.device)``, so a plain (CPU)
+        allocation here would leave the trainable adapter behind on CPU
+        while every input batch is on CUDA."""
         if len(self.adapter_list) > 0:
             self.adapter_list[-1].requires_grad_(False)
             self.adapter_list[-1].eval()
-        self.adapter_list.append(self._new_adapter_set())
+        device = next(self.base.parameters()).device
+        self.adapter_list.append(self._new_adapter_set().to(device))
 
     def _forward_with(self, x: torch.Tensor, adapter_set: nn.ModuleList) -> torch.Tensor:
         adapter: Dict[int, nn.Module] = dict(enumerate(adapter_set))

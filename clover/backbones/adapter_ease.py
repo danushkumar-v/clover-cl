@@ -68,11 +68,17 @@ class EaseAdapterViT(nn.Module):
 
     def grow(self) -> None:
         """Freeze the current (most recent) adapter set, if any, then
-        allocate a fresh trainable one for the upcoming experience."""
+        allocate a fresh trainable one for the upcoming experience.
+
+        The new set is created on the base model's device: grow() runs in
+        ``before_experience`` after ``.to(ctx.device)``, so a plain (CPU)
+        allocation here would leave the one trainable adapter behind on CPU
+        while every input batch is on CUDA."""
         if len(self.adapter_sets) > 0:
             self.adapter_sets[-1].requires_grad_(False)
             self.adapter_sets[-1].eval()
-        self.adapter_sets.append(self._new_adapter_set())
+        device = next(self.base.parameters()).device
+        self.adapter_sets.append(self._new_adapter_set().to(device))
 
     def _forward_with(self, x: torch.Tensor, adapter_set: nn.ModuleList) -> torch.Tensor:
         adapter: Dict[int, nn.Module] = dict(enumerate(adapter_set))

@@ -1155,7 +1155,23 @@ unchecked. If a phase must deviate from SPEC.md, record the deviation under
      (7 scenarios x 3 seeds).
   CUDA fixes are code-inspection-verified only (no local GPU, unavoidably);
   the submission instructions therefore order a 1-cell GPU pilot before
-  the full matrix. Scientific framing note recorded for the presentation:
+  the full matrix.
+
+- **2026-07-28, first real Snellius matrix run — one missed CUDA bug found
+  and fixed.** The pilot (MOS), the SimpleCIL+ViT-B/16 matrix (21/21), and
+  147/189 of matrix_full completed; all 42 EASE and TUNA cells crashed with
+  a device mismatch. Root cause: `EaseAdapterViT.grow()`/`TunaAdapterViT.
+  grow()` allocate a *fresh* adapter module and are called in
+  `before_experience` **after** `.to(ctx.device)` — the new adapter's
+  parameters stayed on CPU. The 2026-07-27 audit checked exactly this
+  ordering for the heads (and fixed `IncrementalHead.expand_to`, which is
+  why MOS/TUNA's heads and the prompt trio survived) but missed that these
+  two backbones also *create modules* at that point. Fixed at the
+  allocation site (`.to(next(self.base.parameters()).device)`), so call
+  order can no longer matter. TUNA's `merged_adapter` verified safe
+  (build-time allocation + value-only `copy_` merges). Lesson recorded:
+  the device audit checklist is "everything that ALLOCATES parameters
+  after build" — heads, pools, AND freshly grown backbone modules. Scientific framing note recorded for the presentation:
   `matrix_full.yaml` (tiny random backbones) validates the framework
   end-to-end on the cluster but its accuracies are not method comparisons;
   the real 9-method pretrained-backbone comparison remains
