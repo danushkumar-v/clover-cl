@@ -15,3 +15,8 @@ htmlcov/
 data/
 inspect_output/
 *.log
+
+# internal planning/session files -- kept local, not in the public repo
+CLAUDE.md
+PLAN.md
+handoff.md
