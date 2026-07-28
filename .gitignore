@@ -21,3 +21,9 @@ CLAUDE.md
 PLAN.md
 handoff.md
 SPEC.md
+
+# run artifacts: keep the light ones (csv/npy/json/log), never the weights.
+# manifests are regenerable from config_resolved.yaml + seeds (deterministic
+# planner), and would add ~85MB of image-index JSON across a full matrix.
+*.pt
+runs/**/manifest.json
