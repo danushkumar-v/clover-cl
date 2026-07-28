@@ -1,0 +1,19 @@
+run:
+  name: cifar100__tuna__exact_replay__seed3
+  seed: 3
+  output_dir: runs/matrix_full
+stream:
+  init_cls: 10
+  increment: 10
+  dataset: cifar100
+  scenario: exact_replay
+  stream_seed: 3
+method:
+  name: tuna
+training:
+  epochs: 5
+  batch_size: 16
+  optimizer:
+    name: adam
+    lr: 0.001875
+  amp: none

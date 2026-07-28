@@ -1,0 +1,19 @@
+run:
+  name: cifar100__simplecil__mid_range_revisit__seed2
+  seed: 2
+  output_dir: runs/matrix_full
+stream:
+  init_cls: 10
+  increment: 10
+  dataset: cifar100
+  scenario: mid_range_revisit
+  stream_seed: 2
+method:
+  name: simplecil
+training:
+  epochs: 5
+  batch_size: 16
+  optimizer:
+    name: adam
+    lr: 0.001875
+  amp: none

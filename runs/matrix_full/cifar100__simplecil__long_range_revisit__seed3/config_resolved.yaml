@@ -1,0 +1,30 @@
+run:
+  name: cifar100__simplecil__long_range_revisit__seed3
+  seed: 3
+  output_dir: runs/matrix_full
+stream:
+  dataset: cifar100
+  init_cls: 10
+  increment: 10
+  task_size: fixed
+  revisits:
+  - classes: task0
+    placement: end_of_stream
+    label: new
+    images: new
+    min_gap: 1
+    times: 1
+  shuffle_seed: 1993
+  stream_seed: 3
+  data_root: ./data
+  dataset_num_classes: null
+method:
+  name: simplecil
+training:
+  epochs: 5
+  batch_size: 16
+  optimizer:
+    name: adam
+    lr: 0.001875
+  amp: none
+  cudnn_benchmark: false

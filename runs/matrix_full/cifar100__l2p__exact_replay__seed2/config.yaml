@@ -1,0 +1,19 @@
+run:
+  name: cifar100__l2p__exact_replay__seed2
+  seed: 2
+  output_dir: runs/matrix_full
+stream:
+  init_cls: 10
+  increment: 10
+  dataset: cifar100
+  scenario: exact_replay
+  stream_seed: 2
+method:
+  name: l2p
+training:
+  epochs: 5
+  batch_size: 16
+  optimizer:
+    name: adam
+    lr: 0.001875
+  amp: none

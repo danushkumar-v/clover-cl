@@ -1,0 +1,19 @@
+run:
+  name: cifar100__coda_prompt__long_range_revisit__seed3
+  seed: 3
+  output_dir: runs/matrix_full
+stream:
+  init_cls: 10
+  increment: 10
+  dataset: cifar100
+  scenario: long_range_revisit
+  stream_seed: 3
+method:
+  name: coda_prompt
+training:
+  epochs: 5
+  batch_size: 16
+  optimizer:
+    name: adam
+    lr: 0.001875
+  amp: none

@@ -1,0 +1,21 @@
+run:
+  name: cifar224__simplecil__cumulative_drift__seed2
+  seed: 2
+  output_dir: runs/matrix_simplecil_vitb16
+stream:
+  init_cls: 10
+  increment: 10
+  dataset: cifar224
+  scenario: cumulative_drift
+  stream_seed: 2
+method:
+  name: simplecil
+  backbone: vit_base_patch16_224
+  pretrained: true
+training:
+  epochs: 1
+  batch_size: 64
+  optimizer:
+    name: adam
+    lr: 0.001875
+  amp: none

@@ -1,0 +1,21 @@
+run:
+  name: cifar224__simplecil__exact_replay__seed1
+  seed: 1
+  output_dir: runs/matrix_simplecil_vitb16
+stream:
+  init_cls: 10
+  increment: 10
+  dataset: cifar224
+  scenario: exact_replay
+  stream_seed: 1
+method:
+  name: simplecil
+  backbone: vit_base_patch16_224
+  pretrained: true
+training:
+  epochs: 1
+  batch_size: 64
+  optimizer:
+    name: adam
+    lr: 0.001875
+  amp: none
