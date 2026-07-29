@@ -22,6 +22,10 @@ PLAN.md
 handoff.md
 SPEC.md
 
+# presentation deck -- local only, never pushed. Rebuild from the analysis
+# figures with `.venv\Scripts\python.exe presentation/build_deck.py`.
+presentation/
+
 # run artifacts: keep the light ones (csv/npy/json/log), never the weights.
 # manifests are regenerable from config_resolved.yaml + seeds (deterministic
 # planner), and would add ~85MB of image-index JSON across a full matrix.
