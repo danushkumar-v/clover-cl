@@ -1,0 +1,10 @@
+runs_dir: runs/matrix_simplecil_vitb16
+results_dir: results_simplecil_vitb16
+dataset: cifar224
+real_backbone: true
+git_commit: dadcf316053b5ed29b1d51e25f2ba8363c7c639e
+date: "2026-07-28"
+notes: >
+  SimpleCIL + real pretrained ViT-B/16, cifar224, 7 scenarios x 3 seeds
+  (21 runs). Scientifically meaningful numbers -- this is the batch the
+  key aliasing finding is drawn from.

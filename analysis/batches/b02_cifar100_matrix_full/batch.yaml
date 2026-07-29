@@ -1,0 +1,12 @@
+runs_dir: runs/matrix_full
+results_dir: results_matrix_full
+dataset: cifar100
+real_backbone: false
+git_commit: dadcf316053b5ed29b1d51e25f2ba8363c7c639e
+date: "2026-07-28"
+notes: >
+  9 methods x 7 scenarios x 3 seeds (189 runs), tiny random (untrained)
+  backbones -> accuracies 0.04-0.10 (~chance). Framework validation only:
+  proves the harness runs every method/scenario/seed combination to
+  completion and produces finite metrics. Never present as a method
+  comparison.
