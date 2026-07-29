@@ -38,6 +38,7 @@ def test_configs_directory_has_the_expected_shipped_files():
         "cifar100_distribution_shift_mos.yaml",
         "matrix_full.yaml",
         "matrix_simplecil_vitb16.yaml",
+        "matrix_simplecil_vitb16_inr.yaml",
         "pilot_gpu_mos.yaml",
     }
 

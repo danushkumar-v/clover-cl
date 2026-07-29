@@ -1,0 +1,41 @@
+# SimpleCIL + pretrained ViT-B/16 on ImageNet-R -- second real dataset
+# (matches the v1 bench's 10/10 split: 200 classes -> 20 experiences).
+#
+# Staging (login node, once):
+#   pip install gdown
+#   gdown 1SG4TbiL8_DooekztyCVK8mPmfhMo8fkR -O data/imagenet-r.zip
+#   unzip -q data/imagenet-r.zip -d data/
+#   ls data/imagenet-r        # expect: train/ test/ (one subdir per class)
+#
+#   sbatch --time=06:00:00 scripts/slurm_run.sh configs/matrix_simplecil_vitb16_inr.yaml
+#
+# ImageFolder-backed datasets are already 224px with ImageNet-style
+# transforms, so no cifar224-style variant is needed. ViT-B/16 weights are
+# ImageNet-1k-pretrained; ImageNet-R's artistic renditions are the standard
+# OOD-shift companion benchmark in PTM-era CL.
+methods:
+  - simplecil
+method_overrides:
+  simplecil:
+    backbone: vit_base_patch16_224
+    pretrained: true
+scenarios:
+  - disjoint_baseline
+  - exact_replay
+  - partial_overlap
+  - long_range_revisit
+  - mid_range_revisit
+  - cumulative_drift
+  - distribution_shift
+datasets:
+  - imagenet_r
+seeds: [1, 2, 3]
+stream:
+  init_cls: 10
+  increment: 10
+training:
+  epochs: 1          # SimpleCIL is closed-form; epochs unused
+  batch_size: 64
+  optimizer: {name: adam, lr: 1.875e-3}
+  amp: none
+output_dir: runs/matrix_simplecil_vitb16_inr
