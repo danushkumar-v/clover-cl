@@ -33,3 +33,4 @@ presentation/
 runs/**/manifest.json
 slurm-*.out
 slurm-*.err
+P11_PLAN.md
