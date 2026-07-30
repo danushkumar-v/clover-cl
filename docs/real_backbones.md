@@ -69,11 +69,23 @@ Four consequences worth knowing:
 - `TimmViTHooks` pools the class token (matching `TinyViT`) rather than
   honouring a base's `global_pool="avg"`.
 - `query_features` mean-pools raw patch-embedding output, exactly as
-  `TinyViT` does. That is the right call for the *backbone* layer — the
-  mechanism must not change with the base — but on a pretrained ViT it
-  means prompt selection sees only the patch-embed convolution, not the 12
-  pretrained blocks. L2P/DualPrompt's published query is a full frozen
-  forward's class token; whether to switch is a per-method decision.
+  `TinyViT` does, and this is still true of the *backbone* layer today —
+  correctly so, since the mechanism must not change with the base. **Fixed
+  at the method layer (P11-B1):** L2P/DualPrompt/CODA-Prompt's published
+  query is a full frozen forward's class token (`l2p.yaml`/
+  `dualprompt.yaml`: `get_original_backbone: true`, `embedding_key: "cls"`),
+  and prompt selection now actually gets it —
+  `clover/methods/prompt_common.py:published_query` builds a no-grad,
+  hook-free `base(x)` call (the pooled class-token feature every base
+  already returns from a plain forward), and `PromptMethodBase.build()`
+  overrides each wrapper's `query_fn` with it. Costs one extra full forward
+  through the base per batch (the mechanism's own forward, with the
+  selected prompts spliced in, still runs separately — the query must be
+  known before it can select what to splice in, so the two forwards can't
+  merge into one). Pinned by `tests/test_prompt_query_fix.py`: perturbing a
+  late block's weights now changes the query on both `TinyViT` and a real
+  timm base, which was false before this fix (the old query never touched
+  any block).
 - A `base_model: vit_*_224` config cannot be run under `--profile smoke`.
   Smoke substitutes the 8×8 synthetic dataset but keeps the method block,
   and a 224-resolution timm model rejects an 8×8 input. `resolve_base_model`
@@ -108,9 +120,9 @@ Filled in as each family lands. "Before" = state at commit `7ffe941`.
 | method | family | before (TinyViT-scale) | after (ViT-B/16) | why |
 |---|---|---|---|---|
 | SimpleCIL | none (plain forward) | already worked with a real timm ViT | unchanged | its base *is* its backbone; no splice needed |
-| L2P | prompt pool | _tbd_ | _tbd_ | _tbd_ |
-| DualPrompt | prefix K/V | `g_layers=(0,)`, `e_layers=(1,)` — fits depth 2 only | _tbd_ | layer indices must derive from depth |
-| CODA-Prompt | prefix K/V, soft | pool sliced per experience at tiny width | _tbd_ | _tbd_ |
+| L2P | prompt pool | `pool_size=10, prompt_length=5, top_k=4`; query = patch-embed-mean (no class-token forward) | `pool_size=10, prompt_length=5, top_k=5` (`clover/backbones/prompt_pool.py`); query = full frozen-backbone forward's class token (`clover/methods/prompt_common.py:published_query`) | `l2p.yaml`: `size=10, length=5, top_k=5`, `get_original_backbone=true`, `embedding_key="cls"` — none of L2P's sizes are depth-dependent (prompt tokens are prepended once, at input, not per-block), so `top_k` was the only literal to fix; the query gap was the real defect (see "three layers of change" above) |
+| DualPrompt | prefix K/V | `g_layers=(0,)`, `e_layers=(1,)` — fits depth 2 only; `g_length=e_length=2`; query = patch-embed-mean | `g_layers`/`e_layers` derived from depth via `default_layer_split(depth)` (`clover/backbones/dual_prompt.py`) — recovers PILOT's `[0,1]`/`[2,3,4]` exactly at depth 12, unchanged `(0,)`/`(1,)` at depth 2; `g_length=e_length=5`; query fixed the same way as L2P | layer indices must derive from depth (as before); `dualprompt.yaml`: `g_prompt_length=5`, `length=5`, `g_prompt_layer_idx=[0,1]`, `e_prompt_layer_idx=[2,3,4]`, `get_original_backbone=true` |
+| CODA-Prompt | prefix K/V, soft | `pool_size=10, length=2, layers=(0,1)` — fixed literal, not depth-derived; Gram-Schmidt only ever exercised at <=6 slots; query = patch-embed-mean | `pool_size=100, length=8` (`coda_prompt.yaml`'s `prompt_param=[100, 8.0, 0.0]`); `layers` derived from depth via `default_layers(depth)` (`clover/backbones/coda_prompt.py`) — recovers PILOT's hardcoded `[0,1,2,3,4]` exactly at depth 12, floored at the previous literal (`(0,1)`, numerically unchanged) at depth 2; query fixed the same way as L2P/DualPrompt (CODA-Prompt's soft combination is *also* query-keyed, via `CodaPromptPool.combine`'s per-slot attention weights, so it benefits from the same fix even without a hard top-k) | PILOT hardcodes `e_layers=[0,1,2,3,4]` in `CodaPrompt._init_smart` regardless of `prompt_param`, so it's a ratio (5 of 12 blocks) once a different-depth base is involved, not a literal; a bare ratio-based floor of 1 block measurably regressed the revisit-safety gate's above-chance accuracy assertion at TinyViT's depth 2 (`exact_replay`/`long_range_revisit`/`partial_overlap`), caught by re-running the full gate before considering this done — floored at 2 (the prior literal) instead, same shape of fix as the adapter family's `default_bottleneck_dim`; Gram-Schmidt re-verified orthogonal at the published `pool_size=100` (`tests/test_prompt_scale_defaults.py`) |
 | APER-Adapter | adapter | bottleneck 8 (literal) | bottleneck 64 (`default_bottleneck_dim(768, 12)`) | PILOT `ffn_num=64` at 768-dim (`aper_adapter.yaml`); derived from `feature_dim`, floored at 8 so TinyViT is unchanged |
 | RanPAC | adapter + RP head | `M=256` (literal, published: 10000) | `M=10000` (`_default_projection_dim(768)`) | `ranpac.yaml`'s `M=10000` restored exactly at 768-dim; scaled proportionally elsewhere, floored at 256 so TinyViT is unchanged. Ridge solve at `M=10000` measured ~50-80s/experience on a 4-thread CPU (see parameter budget below) |
 | EASE | growing adapters | one set per experience, 2 blocks, bottleneck 8 (literal) | one set per experience, 12 blocks, bottleneck 64 | `ease.yaml`'s `ffn_num=64`, same derivation as APER-Adapter (shared ratio: both use PILOT's 64-at-768 width); head is `[classes, num_experiences, 768]`, growing every experience — see parameter budget |

@@ -2,11 +2,18 @@
 similarity against a frozen backbone's query features, prepended as extra
 input tokens (single insertion point -- no attention-internals surgery,
 unlike DualPrompt/CODA-Prompt).
+
+Pool size / prompt length / top-k default to the published values
+(``bench/configs/methods/l2p.yaml``: ``size=10``, ``length=5``, ``top_k=5``)
+-- none of them are a function of the base's depth (L2P injects prompt
+*tokens* once, at the input, not per-block), so unlike DualPrompt/CODA
+-Prompt there is no TinyViT-vs-ViT-B/16 scaling tension here: the same
+defaults are correct at both scales.
 """
 
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Any, Callable, Tuple
 
 import torch
 import torch.nn as nn
@@ -45,7 +52,7 @@ class PromptPoolViT(nn.Module):
     (prompt + key) is the only thing this wrapper trains, along with
     whatever head sits on top."""
 
-    def __init__(self, base: nn.Module, pool_size: int = 10, prompt_length: int = 5, top_k: int = 4) -> None:
+    def __init__(self, base: nn.Module, pool_size: int = 10, prompt_length: int = 5, top_k: int = 5) -> None:
         super().__init__()
         self.base = base
         self.base.requires_grad_(False)
@@ -56,9 +63,17 @@ class PromptPoolViT(nn.Module):
         self.feature_dim = feature_dim
         self.pool = PromptPool(pool_size, prompt_length, self.feature_dim)
         self.top_k = top_k
+        #: How prompt selection turns an image into a query -- defaults to
+        #: the backbone's own (patch-embed-only) ``query_features``, but
+        #: ``clover/methods/prompt_common.py`` overrides this at method
+        #: build time with the published full-frozen-forward query (see
+        #: that module's docstring for why). A plain callable attribute
+        #: (not an ``nn.Module``), so it's never part of this wrapper's
+        #: own ``state_dict``/parameters.
+        self.query_fn: Callable[[torch.Tensor], torch.Tensor] = self.base.query_features  # type: ignore[assignment]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        query = self.base.query_features(x)  # type: ignore[operator]
+        query = self.query_fn(x)
         selected_prompts, _ = self.pool.select(query, self.top_k)
         return self.base(x, prompt_tokens=selected_prompts)
 
@@ -68,7 +83,7 @@ def vit_prompt_pool(
     base_model: str = "tiny_vit",
     pool_size: int = 10,
     prompt_length: int = 5,
-    top_k: int = 4,
+    top_k: int = 5,
     **base_kwargs: Any,
 ) -> nn.Module:
     base = resolve_base_model(base_model, **base_kwargs)

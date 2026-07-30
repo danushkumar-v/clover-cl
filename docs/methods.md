@@ -21,6 +21,157 @@ locally: the registry-driven revisit-safety gate (all 6 core scenarios) and
 | MOS | done (P6) | EMA-merged, one continuously-trained adapter | cosine prototype + CA |
 | TUNA | done (P6) | EMR-merged per-task adapter | angular-margin-trained cosine + CA |
 
+## Prompt family (P5 / P11-B1)
+
+All three prompt-family methods wrap a frozen base ViT with a small set of
+trainable prompt/key parameters and a gradient-trained incremental head,
+sharing one build/train/classify implementation
+(`clover/methods/prompt_common.py:PromptMethodBase`) -- only the backbone
+mechanism (`clover/backbones/{prompt_pool,dual_prompt,coda_prompt}.py`)
+differs between them. P11-B1 replaced every TinyViT-scale structural
+default (chosen for `depth=2`, `feature_dim=16`) with the published value at
+ViT-B/16 scale, derived from the base's own `depth`/`feature_dim` rather
+than hardcoded -- see `docs/real_backbones.md`'s per-method change log for
+the exact before/after numbers and source lines. It also fixed a fidelity
+gap common to all three: prompt/pool selection's *query* now comes from a
+full frozen forward through the pretrained base (its class-token feature),
+not just the patch-embedding convolution -- see "The `query_features`
+fidelity fix" below.
+
+### The `query_features` fidelity fix (P11-B1)
+
+`TimmViTHooks.query_features`/`TinyViT.query_features`
+(`clover/backbones/timm_vit.py`/`vit.py`) mean-pool raw patch-embedding
+output -- correct for the *backbone* layer, which must behave identically
+regardless of which base or method uses it, but wrong for L2P/DualPrompt/
+CODA-Prompt specifically: all three PILOT configs set
+`get_original_backbone: true` and `embedding_key: "cls"`, meaning prompt
+selection is published to compare against the frozen backbone's own
+class-token feature from a **full forward pass**, not a patch-embed-only
+proxy. On a randomly-initialized TinyViT that distinction is immaterial;
+on a pretrained ViT it is the difference between "prompt selection sees 12
+blocks of pretrained signal" and "prompt selection sees none of them."
+
+Fixed at the method layer, not the backbone layer:
+`clover/methods/prompt_common.py:published_query(base)` returns a callable
+that runs a no-grad, hook-free `base(x)` (exactly the pooled class-token
+feature every base already returns from a plain forward -- no
+`prompt_tokens`/`prefix_kv`/`adapter` passed), and `PromptMethodBase.build()`
+overrides each wrapper's `query_fn` attribute with it right after
+construction. `query_fn` is a plain callable attribute on
+`PromptPoolViT`/`DualPromptViT`/`CodaPromptViT` (added by P11-B1,
+defaulting to the wrapper's own `base.query_features` so a backbone
+constructed directly, outside a method, is unaffected) -- not an `nn.Module`,
+so it's never part of the wrapper's own `state_dict`/parameters, and
+overriding it doesn't disturb `base`'s frozen `requires_grad_(False)`/
+`eval()` state.
+
+**Cost**: one full extra forward pass through the base per training/eval
+batch. The mechanism's own forward (prompts spliced in) still has to run
+separately -- the query must be known *before* the prompt can be selected,
+so the two forwards cannot be merged into one. Unavoidable at the
+architecture CLOVER already has; not measured against a training budget
+here (CPU-only, no timing claim beyond "one extra full backbone forward").
+
+**Evidence it now depends on the base's own blocks**
+(`tests/test_prompt_query_fix.py`): perturbing a *late* transformer block's
+weights (with independent per-entry noise, not a uniform additive shift --
+a uniform shift is invariant under the base's own final LayerNorm and gives
+a false negative) now measurably changes the query, on both TinyViT and a
+real timm base (`vit_tiny_patch16_224`, `pretrained=False`). Before this
+fix, the same perturbation left the query completely unchanged, since it
+only ever touched the patch-embed convolution.
+
+### L2P
+
+Prompt pool (`clover/backbones/prompt_pool.py:PromptPoolViT`): a learnable
+`[pool_size, prompt_length, embed_dim]` bank of prompts plus
+`[pool_size, embed_dim]` keys, top-`k` selected by cosine similarity to the
+query and prepended as extra input tokens -- the only prompt-family method
+that doesn't touch attention internals (no `prefix_kv`).
+
+Hyperparameters (bench provenance: `bench/configs/methods/l2p.yaml`):
+
+| Key | PILOT value | CLOVER default | Note |
+|---|---|---|---|
+| `pool_size` (PILOT: `size`) | 10 | 10 | unchanged -- already matched |
+| `prompt_length` (PILOT: `length`) | 5 | 5 | unchanged -- already matched |
+| `top_k` | 5 | 5 (was 4) | P11-B1: the one literal that didn't already match; not depth-dependent (L2P injects prompt tokens once, at the input, not per-block), so no TinyViT-vs-ViT-B/16 scaling tension for this method's sizes -- the same value is correct at both scales |
+| initializer/`prompt_key_init` | `"uniform"` (PILOT's own `EPrompt` -- `nn.init.uniform_(self.prompt, -1, 1)`) | `nn.init.uniform_(..., -1.0, 1.0)` | unchanged -- already matched (confirmed via read-only research on `backbone/prompt.py`'s `EPrompt.__init__`) |
+| query (`embedding_key`) | `"cls"` + `get_original_backbone: true` (a full frozen-backbone forward's class token) | `clover/methods/prompt_common.py:published_query` (P11-B1) | was a patch-embed-only mean (`query_features`); see "The `query_features` fidelity fix" above |
+| gradient-loop epochs/lr | `tuned_epoch=5`, `init_lr=0.001875` | 40 / 3e-2 (safety-gate default) | tuned for the tiny random backbone, see PLAN.md P5 log; training-hyperparameter work (not width/query fidelity) is P11-C's scope |
+
+### DualPrompt
+
+General + expert prefix-KV (`clover/backbones/dual_prompt.py:
+DualPromptViT`): an always-active "general" prompt at fixed shallow blocks,
+plus a task-conditioned "expert" prompt pool (top-`k` selected, like L2P's)
+at a few blocks further in -- both injected as key/value pairs prepended
+inside specific attention blocks (needs the base's `prefix_kv` hook, unlike
+L2P's whole-sequence token prepend).
+
+Hyperparameters (bench provenance: `bench/configs/methods/dualprompt.yaml`):
+
+| Key | PILOT value | CLOVER default | Note |
+|---|---|---|---|
+| `g_length` (PILOT: `g_prompt_length`) | 5 | 5 (was 2) | P11-B1 |
+| `e_length` (PILOT: `length`, shared with the pool section) | 5 | 5 (was 2) | P11-B1 |
+| `pool_size` (PILOT: `size`) | 10 | 10 | unchanged -- already matched |
+| `top_k` | 1 | 1 | unchanged -- already matched |
+| `g_layers`/`e_layers` (PILOT: `g_prompt_layer_idx=[0,1]`, `e_prompt_layer_idx=[2,3,4]`) | 2 g-blocks, 3 e-blocks of a 12-block ViT-B/16 | `default_layer_split(depth)` (`clover/backbones/dual_prompt.py`) -- `([0,1],[2,3,4])` at depth 12 (exact), `((0,),(1,))` at depth 2 (numerically unchanged from the pre-P11-B1 literal) | P11-B1: was a bare literal (`(0,)`/`(1,)`) that only made sense at TinyViT's depth 2; now a 2:3 ratio of the base's own depth, floored at 1 block per side so a shallow base still gets a valid, disjoint, in-range split -- pinned at both depths by `tests/test_prompt_scale_defaults.py` |
+| prompt tensor width for the K/V reshape | `embed_dim` (`num_heads * head_dim` in every base tested) | `getattr(attn, "attn_dim", num_heads * head_dim)` | defensive: timm exposes `attn_dim` because it can differ from `feature_dim` on non-standard configs (P11-A note); sized to whichever is correct for the reshape `_to_prefix` performs, though the two coincide for every base actually used here |
+| query (`embedding_key`) | `"cls"` + `get_original_backbone: true` | `published_query` (P11-B1) | same fix as L2P |
+| gradient-loop epochs/lr | `tuned_epoch=5`, `init_lr=0.001` | 40 / 3e-2 (safety-gate default) | tuned for the tiny random backbone; training-hyperparameter work is P11-C's scope |
+
+### CODA-Prompt
+
+Soft-combined prefix-KV pool (`clover/backbones/coda_prompt.py:
+CodaPromptViT`/`CodaPromptPool`): every pool component contributes via a
+softmax attention weight over the "unlocked" slice of the pool (no hard
+top-`k`, unlike L2P/DualPrompt), injected as prefix K/V at a handful of
+blocks. Each new task Gram-Schmidt-orthogonalizes its newly unlocked slots
+against everything already unlocked, rather than reinitializing them.
+
+Hyperparameters (bench provenance: `bench/configs/methods/coda_prompt.yaml`
+-- PILOT expresses pool size/length as `prompt_param: [100, 8.0, 0.0]`):
+
+| Key | PILOT value | CLOVER default | Note |
+|---|---|---|---|
+| `pool_size` (PILOT: `prompt_param[0]`) | 100 | 100 (was 10) | P11-B1 |
+| `length` (PILOT: `prompt_param[1]`) | 8 | 8 (was 2) | P11-B1 |
+| `ortho_mu` (PILOT: `prompt_param[2]`, an orthogonality *loss* penalty) | 0.0 (disabled) | not reimplemented | PILOT's own published config disables it, so there is nothing to carry over structurally in this pass -- CLOVER's Gram-Schmidt orthogonalization is a direct parameter-space operation (`CodaPromptPool.start_new_task`), not a loss term, and was already implemented pre-P11 |
+| `layers` (PILOT hardcodes `e_layers=[0,1,2,3,4]` in `CodaPrompt._init_smart`, independent of `prompt_param`) | 5 of a 12-block ViT-B/16 | `default_layers(depth)` (`clover/backbones/coda_prompt.py`) -- `(0,1,2,3,4)` at depth 12 (exact), `(0,1)` at depth 2 (floored at the prior literal, numerically unchanged) | P11-B1: a bare ratio-based floor of 1 block (rather than 2) measurably regressed the revisit-safety gate's above-chance accuracy assertion at TinyViT's depth 2 (`exact_replay`/`long_range_revisit`/`partial_overlap` scenarios) -- caught by re-running the full gate, fixed by flooring at the prior literal instead, same shape of derivation as the adapter family's `default_bottleneck_dim` |
+| query (soft-combined, not top-`k`, but still query-keyed via `CodaPromptPool.combine`'s per-slot attention weights) | full frozen-backbone forward's class token (same `get_original_backbone`-equivalent convention as L2P/DualPrompt) | `published_query` (P11-B1) | CODA-Prompt shares the same `query_fn` override mechanism even though it has no hard top-k step |
+| Gram-Schmidt orthogonalization at `pool_size=100` | -- | re-verified correct (`tests/test_prompt_scale_defaults.py`) | previously only ever exercised at <=6 slots in this codebase's tests; the vector space (`n_layers * 2 * length * embed_dim`) is large enough relative to `pool_size` at both TinyViT and ViT-B/16 scale that orthogonality (and speed) hold without change to the algorithm itself |
+| gradient-loop epochs/lr | `tuned_epoch=20`, `init_lr=0.001` | 40 / 3e-2 (safety-gate default) | tuned for the tiny random backbone; training-hyperparameter work is P11-C's scope |
+
+### Judgment calls / scope simplifications (P11-B1)
+
+- **CODA-Prompt's own prompt/key/attention-vector initialisation was left
+  unchanged**, even though read-only research into `backbone/prompt.py`
+  found PILOT's `CodaPrompt.tensor_prompt` uses bare `nn.init.uniform_(p)`
+  (default range `[0, 1)`) for its own prompt/key/`attn_vec` tensors --
+  different from `EPrompt`'s (L2P/DualPrompt's shared implementation)
+  explicit `nn.init.uniform_(p, -1, 1)`, which CLOVER's `CodaPromptPool`
+  already matches. This divergence was noticed but not in this phase's
+  named scope (pool size/length/layer-derivation/Gram-Schmidt were); it's
+  a candidate for a future pass, not fixed here to avoid an unreviewed
+  behavior change beyond what was asked.
+- **`CodaPromptPool`'s prompt tensor and its key/`attn_vec` share one
+  `embed_dim`** rather than sizing the prompt tensor to `attn_dim`
+  (unlike `DualPromptViT`, which does make this distinction) -- splitting
+  `CodaPromptPool`'s single `embed_dim` parameter into two would ripple
+  into its public constructor signature and existing direct-construction
+  tests for no behavior change on any base actually used here (`attn_dim
+  == feature_dim` for every base tested), so it was left as one dimension.
+- **`query_fn` is a plain callable attribute, not a config-driven switch**:
+  there is no user-facing knob to opt back into the old (patch-embed-only)
+  query -- the published behavior is the only behavior a method built
+  through `PromptMethodBase.build()` exposes. A wrapper constructed
+  directly (bypassing a method, e.g. in a backbone-level test) still
+  defaults to the old `query_features`-based behavior, since that default
+  lives on the wrapper class itself, not the override.
+
 ## Adapter family (P6)
 
 All adapter-family methods insert an AdaptFormer-style bottleneck adapter
