@@ -111,11 +111,11 @@ Filled in as each family lands. "Before" = state at commit `7ffe941`.
 | L2P | prompt pool | _tbd_ | _tbd_ | _tbd_ |
 | DualPrompt | prefix K/V | `g_layers=(0,)`, `e_layers=(1,)` — fits depth 2 only | _tbd_ | layer indices must derive from depth |
 | CODA-Prompt | prefix K/V, soft | pool sliced per experience at tiny width | _tbd_ | _tbd_ |
-| APER-Adapter | adapter | bottleneck 8 | _tbd_ | _tbd_ |
-| RanPAC | adapter + RP head | `M=256` (published: 10000) | _tbd_ | reduced only to suit a 16-dim feature |
-| EASE | growing adapters | one set per experience, 2 blocks | _tbd_ | head is `[classes, blocks, block_dim]` |
-| MOS | EMA-merged adapter | bottleneck 8 | _tbd_ | _tbd_ |
-| TUNA | EMR-merged adapters | bottleneck 8 | _tbd_ | _tbd_ |
+| APER-Adapter | adapter | bottleneck 8 (literal) | bottleneck 64 (`default_bottleneck_dim(768, 12)`) | PILOT `ffn_num=64` at 768-dim (`aper_adapter.yaml`); derived from `feature_dim`, floored at 8 so TinyViT is unchanged |
+| RanPAC | adapter + RP head | `M=256` (literal, published: 10000) | `M=10000` (`_default_projection_dim(768)`) | `ranpac.yaml`'s `M=10000` restored exactly at 768-dim; scaled proportionally elsewhere, floored at 256 so TinyViT is unchanged. Ridge solve at `M=10000` measured ~50-80s/experience on a 4-thread CPU (see parameter budget below) |
+| EASE | growing adapters | one set per experience, 2 blocks, bottleneck 8 (literal) | one set per experience, 12 blocks, bottleneck 64 | `ease.yaml`'s `ffn_num=64`, same derivation as APER-Adapter (shared ratio: both use PILOT's 64-at-768 width); head is `[classes, num_experiences, 768]`, growing every experience — see parameter budget |
+| MOS | EMA-merged adapter | bottleneck 8 (literal) | bottleneck 16 (`default_bottleneck_dim(768, 48)`) | `mos.yaml`'s `ffn_num=16` — narrower than APER/EASE/RanPAC's 64, its own published ratio (1:48) |
+| TUNA | EMR-merged adapters | bottleneck 8 (literal) | bottleneck 16 | PILOT hardcodes 16 in `init_adapters()` (its own `r: 16` config key is dead code upstream — `tuna.yaml`); same ratio as MOS |
 
 ## Configuration surface
 
@@ -155,7 +155,61 @@ declaration that contradicts it.
 
 ## Parameter budget at ViT-B/16 scale
 
-_Filled in by P11-C: trainable parameters per experience and total stored
-state after a 10-experience stream, per method. Recorded because several
-methods store per-experience adapter sets, and unbounded growth is a
-property worth reporting rather than discovering on a cluster._
+Measured (P11-B2), not estimated: constructed each backbone/head at
+ViT-B/16 scale (`depth=12`, `feature_dim=768`) with the scale-derived
+defaults above, drove the same growth calls the real methods make
+(`grow()`/`snapshot()`/`add_block()`) for a 10-experience stream
+(`init_cls=10, increment=10` ⇒ 100 classes after 10 experiences, matching
+the bench YAMLs' convention), and summed `numel()` over every stored
+parameter. One `Adapter` set = one `Adapter` (down-proj + up-proj, each
+with bias) per transformer block × `depth=12`; at `bottleneck_dim=B`, one
+set costs `12 × (2 × 768 × B + B + 768)` parameters.
+
+| method | per-experience trainable | total stored after 10 experiences | head size | note |
+|---|---|---|---|---|
+| APER-Adapter | one adapter set, exp 0 only (~1.19M params, bottleneck 64) | **fixed**: 1,189,632 (adapter, frozen after exp 0) | `[100, 1536]` = 153,600 (dual-branch concat doubles width) | adapter never grows; only the head's prototype rows are rewritten per experience |
+| RanPAC | one adapter set, exp 0 only (shares APER-Adapter's mechanism) | **fixed**: 1,189,632 (adapter) + `G` `[10000,10000]`=100,000,000 + `Q` `[10000,100]`=1,000,000 + `w_rand` `[768,10000]`=7,680,000 + `weight` `[100,10000]`=1,000,000 | see above (`w_rand`/`G`/`Q`/`weight` are the "head") | `G` alone is 400MB (fp32) at the published `M=10000` — the dominant cost in this whole family; **ridge-solve tractability finding below** |
+| EASE | one new adapter set/experience (~1.19M params, bottleneck 64) | **grows every experience**: 1,189,632 × 10 = 11,896,320 (adapters) + head `[100,10,768]`=768,000 = **12,664,320 total** | `[100, 10, 768]` = 768,000, width grows by 768 every experience | flagged: adapter storage grows *linearly and unboundedly* with stream length — a 20-experience CIFAR-224 stream would store ~24M adapter params, a 50-experience one ~60M, larger than the ViT-B/16 backbone itself (~86M) well before that |
+| MOS | one continuously-trained adapter (bottleneck 16, ~304K params) | **fixed** (not growing): cur_adapter + 9 frozen snapshots + 1 running-sum accumulator = 11 same-shaped sets × 304,320 = 3,347,520 | `[100, 768]` = 76,800 (fixed-width, unlike EASE) | snapshots accumulate one per experience but each is the *same* small width (16), so growth is linear in experience count but at 16x smaller per-unit cost than EASE's 64-wide sets — no head growth at all |
+| TUNA | one new adapter/experience (bottleneck 16, ~304K params) | **grows every experience**: 304,320 × 10 (per-task) + 304,320 × 1 (merged) = 3,347,520 | `[100, 768]` = 76,800 (fixed-width, plain `IncrementalHead`) | same linear-growth shape as EASE but at MOS's narrower bottleneck (16 vs 64), so ~3.5x less storage per experience than EASE for the same stream length |
+
+**Headline finding — EASE's growth is the one to flag prominently.** Every
+other method in this family is either fixed-cost (APER-Adapter/RanPAC: one
+adapter, trained once) or grows at a narrow 16-wide bottleneck (MOS/TUNA).
+EASE grows a *full 64-wide, 12-block* adapter set every single experience,
+with no merging or pruning — storage is `O(n_experiences × depth ×
+bottleneck × feature_dim)`, unbounded in stream length by design (the
+method's own mechanism: it needs every past adapter set still callable at
+inference to reconstruct old classes' features). At 10 experiences this is
+already ~11.9M parameters (larger than RanPAC's or TUNA's *entire* stored
+state); a real CIFAR-224/ImageNet-R run with more experiences will keep
+growing linearly with no ceiling. This is reported here rather than capped
+silently, per this phase's instructions — whether it needs an eviction or
+merging strategy is a design question for whoever schedules the real
+cluster matrices, not something to quietly shrink in this pass.
+
+**RanPAC ridge-solve tractability at the published `M=10000`.** `G` is
+`[10000, 10000]`; `torch.linalg.solve(G + ridge·I, Q)` was timed directly
+on this CPU (no GPU available locally):
+
+- A single `[10000,10000]` solve: **~6.5-8.3s** (3 trials, 4 BLAS threads).
+- `RanPAC._update_head`'s real per-experience cost is *7* solves (a 6-value
+  ridge grid search against an 80/20 held-out split, plus 1 final solve
+  after `accumulate`), plus the `phi.t() @ phi`/`phi.t() @ y` matmuls that
+  build `trial_g`/`trial_q`: **~53s measured end-to-end for one experience**
+  (500 synthetic samples, 100 classes).
+- Projected over a 10-experience stream: **~530s (~9 minutes)** spent
+  purely in RanPAC's closed-form head update, on top of backbone forward
+  passes — before any dataset-specific cost.
+
+This machine has no GPU, so all of the above was measured on CPU
+(4 threads) -- `G`/`Q`/`weight`/`w_rand` are registered buffers/parameters
+of `RandomProjectionRidgeHead`, so they *do* move to CUDA along with the
+rest of the head (`RanPAC.before_experience`'s `self.head =
+self.head.to(ctx.device)`), and `torch.linalg.solve` would run on the GPU
+(cuSOLVER) on a real cluster job -- almost certainly much faster than this
+CPU number, but not measurable here. Reported here rather than silently
+shrinking `M`, per this phase's instructions; P11-C/cluster scheduling
+should get a real GPU timing before assuming this is free, since a
+9-method × 7-scenario × multi-dataset matrix that includes RanPAC will
+otherwise be planned against an unverified assumption.

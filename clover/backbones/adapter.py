@@ -14,13 +14,45 @@ wrapper (queued) built on the same ``Adapter`` class + hook.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
 
 from clover.backbones import register_backbone
 from clover.backbones.loader import resolve_base_model
+
+#: Every adapter-family method's ``ffn_num``/bottleneck width was
+#: previously a bare literal (8) sized for TinyViT's 16-dim feature. PILOT's
+#: published widths are fixed constants tuned for a 768-dim ViT-B/16
+#: checkpoint (see ``bench/configs/methods/*.yaml``): APER-Adapter/RanPAC/
+#: EASE use ``ffn_num=64`` (a 1:12 ratio to feature_dim), MOS/TUNA use 16
+#: (1:48). ``default_bottleneck_dim`` recovers the published value exactly
+#: at ViT-B/16 scale by applying that same ratio to *any* base's
+#: ``feature_dim``, floored at 8 -- the literal this project's TinyViT
+#: safety gate was already tuned against -- so a synthetic backbone's
+#: bottleneck never shrinks below what's known to reliably clear
+#: above-chance accuracy in the gate's epoch budget.
+APER_EASE_RANPAC_BOTTLENECK_RATIO = 12  # ffn_num=64 at feature_dim=768
+MOS_TUNA_BOTTLENECK_RATIO = 48  # ffn_num=16 at feature_dim=768
+_MIN_BOTTLENECK_DIM = 8
+
+
+def default_bottleneck_dim(feature_dim: int, published_ratio: int) -> int:
+    """Scale a published adapter bottleneck width to *feature_dim*.
+
+    Args:
+        feature_dim: The base model's own feature width (``base.feature_dim``).
+        published_ratio: ``feature_dim / bottleneck_dim`` at the PILOT
+            reference scale (ViT-B/16, 768-dim) -- see the module docstring
+            for which methods use which ratio and why.
+
+    Returns:
+        ``round(feature_dim / published_ratio)``, floored at
+        :data:`_MIN_BOTTLENECK_DIM` so a tiny synthetic backbone (e.g.
+        TinyViT's ``embed_dim=16``) doesn't collapse to a degenerate width.
+    """
+    return max(_MIN_BOTTLENECK_DIM, round(feature_dim / published_ratio))
 
 
 class Adapter(nn.Module):
@@ -57,7 +89,9 @@ class AdapterViT(nn.Module):
     APER-Adapter's dual-branch concatenation.
     """
 
-    def __init__(self, base: nn.Module, bottleneck_dim: int = 8, scale: float = 0.1) -> None:
+    def __init__(
+        self, base: nn.Module, bottleneck_dim: Optional[int] = None, scale: float = 0.1
+    ) -> None:
         super().__init__()
         depth = len(base.blocks)  # type: ignore[arg-type]
         self.base = base
@@ -66,6 +100,9 @@ class AdapterViT(nn.Module):
 
         feature_dim: int = base.feature_dim  # type: ignore[assignment]
         self.feature_dim = feature_dim
+        if bottleneck_dim is None:
+            bottleneck_dim = default_bottleneck_dim(feature_dim, APER_EASE_RANPAC_BOTTLENECK_RATIO)
+        self.bottleneck_dim = bottleneck_dim
         self.adapters = nn.ModuleList(
             [Adapter(feature_dim, bottleneck_dim, scale) for _ in range(depth)]
         )
@@ -77,7 +114,10 @@ class AdapterViT(nn.Module):
 
 @register_backbone("vit_adapter")
 def vit_adapter(
-    base_model: str = "tiny_vit", bottleneck_dim: int = 8, scale: float = 0.1, **base_kwargs: Any
+    base_model: str = "tiny_vit",
+    bottleneck_dim: Optional[int] = None,
+    scale: float = 0.1,
+    **base_kwargs: Any,
 ) -> nn.Module:
     base = resolve_base_model(base_model, **base_kwargs)
     return AdapterViT(base, bottleneck_dim=bottleneck_dim, scale=scale)

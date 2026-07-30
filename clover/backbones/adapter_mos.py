@@ -20,13 +20,13 @@ succeeds must happen there, not in ``train_experience``/
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, cast
+from typing import Any, Dict, Optional, cast
 
 import torch
 import torch.nn as nn
 
 from clover.backbones import register_backbone
-from clover.backbones.adapter import Adapter
+from clover.backbones.adapter import MOS_TUNA_BOTTLENECK_RATIO, Adapter, default_bottleneck_dim
 from clover.backbones.loader import resolve_base_model
 
 
@@ -53,7 +53,11 @@ class MOSAdapterViT(nn.Module):
     """
 
     def __init__(
-        self, base: nn.Module, bottleneck_dim: int = 8, scale: float = 0.1, momentum: float = 0.1
+        self,
+        base: nn.Module,
+        bottleneck_dim: Optional[int] = None,
+        scale: float = 0.1,
+        momentum: float = 0.1,
     ) -> None:
         super().__init__()
         self.depth = len(base.blocks)  # type: ignore[arg-type]
@@ -63,6 +67,10 @@ class MOSAdapterViT(nn.Module):
 
         feature_dim: int = base.feature_dim  # type: ignore[assignment]
         self.feature_dim = feature_dim
+        if bottleneck_dim is None:
+            # MOS's published ffn_num (16) -- narrower than APER-Adapter/
+            # EASE/RanPAC's 64, per bench/configs/methods/mos.yaml.
+            bottleneck_dim = default_bottleneck_dim(feature_dim, MOS_TUNA_BOTTLENECK_RATIO)
         self._bottleneck_dim = bottleneck_dim
         self._scale = scale
         self.momentum = momentum
@@ -133,7 +141,7 @@ class MOSAdapterViT(nn.Module):
 @register_backbone("vit_adapter_mos")
 def vit_adapter_mos(
     base_model: str = "tiny_vit",
-    bottleneck_dim: int = 8,
+    bottleneck_dim: Optional[int] = None,
     scale: float = 0.1,
     momentum: float = 0.1,
     **base_kwargs: Any,

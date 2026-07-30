@@ -45,13 +45,15 @@ without needing a second model instance, since `AdapterViT.base` is frozen
 before any adapter training happens.
 
 Hyperparameters (bench provenance: `bench/configs/methods/aper_adapter.yaml`
-≈ PILOT `exps/aper_aperpter.json`), scaled down for `TinyViT`:
+≈ PILOT `exps/aper_aperpter.json`); `bottleneck_dim` is derived from the
+base's own `feature_dim` (P11-B2), recovering the published value exactly
+at ViT-B/16 scale while leaving TinyViT unchanged:
 
 | Key | PILOT value | CLOVER default | Note |
 |---|---|---|---|
-| `bottleneck_dim` (PILOT: `ffn_num`) | 64 | 8 | scaled to `TinyViT`'s `embed_dim=16` |
+| `bottleneck_dim` (PILOT: `ffn_num`) | 64 (at `feature_dim=768`) | `default_bottleneck_dim(feature_dim, 12)` — 64 at ViT-B/16 (`feature_dim=768`), 8 at TinyViT (`feature_dim=16`) | P11-B2: was a bare literal `8` (scaled for `TinyViT`'s `embed_dim=16`, wrong-by-construction on a real ViT); now `round(feature_dim/12)` floored at 8, `clover/backbones/adapter.py:default_bottleneck_dim` |
 | `scale` (PILOT: `ffn_adapter_scalar`) | 0.1 | 0.1 | unchanged |
-| adapter-tuning epochs | 20 | 40 (safety-gate default) | tuned for the tiny random backbone, see PLAN.md P5 log |
+| adapter-tuning epochs | 20 | 40 (safety-gate default) | tuned for the tiny random backbone, see PLAN.md P5 log; training-hyperparameter work (not width/capacity) is P11-C's scope |
 | adapter-tuning lr | 0.01 | 3e-2 (safety-gate default) | ditto |
 
 ### RanPAC
@@ -71,9 +73,9 @@ Hyperparameters (bench provenance: `bench/configs/methods/ranpac.yaml`):
 
 | Key | PILOT value | CLOVER default | Note |
 |---|---|---|---|
-| `projection_dim` (PILOT: `M`) | 10000 | 256 | scaled down; PILOT's is sized for a 768-dim pretrained ViT |
-| ridge grid | 17 values, 1e-8..1e8 | 6 values, 1e-3..100 | scaled range for the smaller feature space |
-| `bottleneck_dim`/adapter-tuning epochs/lr | same as APER-Adapter | same as APER-Adapter | shared backbone mechanism |
+| `projection_dim` (PILOT: `M`) | 10000 (at `feature_dim=768`) | `_default_projection_dim(feature_dim)` — 10000 at ViT-B/16 (`feature_dim=768`), 256 at TinyViT (`feature_dim=16`) | P11-B2: was a bare literal `256` (explicitly reduced to suit `TinyViT`'s 16-dim feature); now `round(feature_dim * 10000/768)` floored at 256, `clover/methods/ranpac.py:_default_projection_dim`. **Ridge-solve cost at `M=10000`**: `torch.linalg.solve` on the resulting `[10000,10000]` `G` matrix measured ~6.5-8.3s/solve on a 4-thread CPU, ~53s for one experience's full ridge-grid-search-plus-solve, ~530s (~9 min) projected over a 10-experience stream -- see `docs/real_backbones.md`'s parameter-budget section. Tractable, not free; not reduced |
+| ridge grid | 17 values, 1e-8..1e8 | 6 values, 1e-3..100 | scaled range for the smaller feature space; unchanged by P11-B2 (a training-search-range choice, not a structural width) |
+| `bottleneck_dim`/adapter-tuning epochs/lr | same as APER-Adapter | same as APER-Adapter | shared backbone mechanism -- see APER-Adapter's row above for the P11-B2 derivation |
 | `use_simplecil` | present, dead config in PILOT (never read by `models/ranpac.py`) | not exposed | not reimplemented -- vestigial upstream |
 
 ### EASE
@@ -112,11 +114,11 @@ Hyperparameters (bench provenance: `bench/configs/methods/ease.yaml`):
 
 | Key | PILOT value | CLOVER default | Note |
 |---|---|---|---|
-| `bottleneck_dim` (PILOT: `ffn_num`) | 64 | 8 | scaled down, same as APER-Adapter/RanPAC |
+| `bottleneck_dim` (PILOT: `ffn_num`) | 64 (at `feature_dim=768`) | same derivation as APER-Adapter/RanPAC -- 64 at ViT-B/16, 8 at TinyViT | P11-B2: was a bare literal `8`; now `default_bottleneck_dim(feature_dim, 12)`. **Stored state grows every experience** (one full 12-block, 64-wide adapter set per experience, no merging) -- ~11.9M params after 10 experiences at ViT-B/16 scale, unbounded in stream length by design; see `docs/real_backbones.md`'s parameter-budget section (flagged prominently there, not capped) |
 | `alpha` | 0.1 | 0.1 | unchanged |
 | `beta` (init-PTM block weight) | 0 | not exposed | `use_init_ptm=false` upstream default -- not reimplemented |
 | `use_diagonal` | false | not exposed | vestigial ablation flag upstream |
-| adapter-tuning epochs/lr | init_epochs=20, init_lr=0.025 | 40 / 3e-2 (safety-gate default) | tuned for the tiny random backbone |
+| adapter-tuning epochs/lr | init_epochs=20, init_lr=0.025 | 40 / 3e-2 (safety-gate default) | tuned for the tiny random backbone; training-hyperparameter work is P11-C's scope |
 
 ### MOS
 
@@ -167,7 +169,7 @@ Hyperparameters (bench provenance: `bench/configs/methods/mos.yaml`):
 
 | Key | PILOT value | CLOVER default | Note |
 |---|---|---|---|
-| `bottleneck_dim` (PILOT: `ffn_num`) | 16 (not 64 like the other adapter methods) | 8 | scaled down proportionally |
+| `bottleneck_dim` (PILOT: `ffn_num`) | 16 (at `feature_dim=768`; not 64 like APER-Adapter/RanPAC/EASE) | `default_bottleneck_dim(feature_dim, 48)` — 16 at ViT-B/16, 8 at TinyViT | P11-B2: was a bare literal `8`; MOS's own published ratio (1:48) is narrower than the other three's (1:12), so it gets its own constant (`MOS_TUNA_BOTTLENECK_RATIO`) rather than reusing APER-Adapter's |
 | `momentum` (PILOT: `adapter_momentum`) | 0.1 | 0.1 | unchanged |
 | `crct_epochs` | 30 | 10 (constructor default) | reduced for the tiny synthetic setup; not yet config-driven (see below) |
 | `ca_lr` | 0.005 | 5e-3 | unchanged |
@@ -226,7 +228,7 @@ PILOT `exps/tuna_cifar.json`):
 
 | Key | PILOT value | CLOVER default | Note |
 |---|---|---|---|
-| `bottleneck_dim` | 16 (PILOT hardcodes this in `init_adapters()`, ignoring its own `r` config key entirely) | 8 | scaled down; PILOT's `r: 16` hyperparameter is dead config upstream, not reimplemented as a separate knob |
+| `bottleneck_dim` | 16 (at `feature_dim=768`; PILOT hardcodes this in `init_adapters()`, ignoring its own `r` config key entirely) | `default_bottleneck_dim(feature_dim, 48)` — 16 at ViT-B/16, 8 at TinyViT | P11-B2: was a bare literal `8`; PILOT's `r: 16` hyperparameter is dead config upstream, not reimplemented as a separate knob -- same ratio (1:48) and same helper as MOS. **Stored state grows every experience** (one adapter per task plus the merged consensus adapter, no pruning) -- ~3.3M params after 10 experiences at ViT-B/16 scale (see `docs/real_backbones.md`'s parameter-budget section) |
 | `margin` (PILOT: `m`) | 0.0 | 0.0 | unchanged -- PILOT's own default disables the angular margin |
 | `scale` (PILOT: cosface `s`) | 20.0 | not a separate knob | folded into whatever scale `IncrementalHead(cosine=True)`'s own learned scale produces -- argmax/accuracy is scale-invariant regardless (see `angular_margin_ce`'s docstring) |
 | `use_orth` | false | not exposed | disabled by PILOT's own default; not reimplemented |

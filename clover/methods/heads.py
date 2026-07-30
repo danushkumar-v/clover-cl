@@ -84,8 +84,15 @@ class RandomProjectionRidgeHead(nn.Module):
     scratch each time (``torch.linalg.solve(G + ridge*I, Q)``) -- this is
     the accumulate-sufficient-statistics trick PILOT's RanPAC uses, not a
     literal Sherman-Morrison-Woodbury inverse update. ``M`` (projection
-    width) is scaled down from PILOT's 10000 (a 768-dim pretrained ViT) to
-    fit this project's tiny synthetic-dataset backbones.
+    width) defaults to PILOT's published 10000 at a 768-dim (ViT-B/16)
+    feature and scales proportionally at any other width, floored at 256
+    for tiny synthetic backbones -- see
+    ``clover/methods/ranpac.py:_default_projection_dim``. At ``M=10000``
+    the ridge solve (``torch.linalg.solve`` on a ``[10000, 10000]`` matrix)
+    measured ~50-80s per experience on a 4-thread CPU (P11-B2); tractable
+    for a single offline run, not for a wide method x scenario matrix on a
+    GPU-less machine -- see ``docs/real_backbones.md``'s parameter-budget
+    section.
     """
 
     #: Explicit types for mypy -- ``register_buffer`` alone doesn't give it

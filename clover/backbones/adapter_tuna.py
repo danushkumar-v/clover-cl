@@ -22,13 +22,13 @@ unlike deferring to the next round's ``before_experience``).
 
 from __future__ import annotations
 
-from typing import Any, Dict, cast
+from typing import Any, Dict, Optional, cast
 
 import torch
 import torch.nn as nn
 
 from clover.backbones import register_backbone
-from clover.backbones.adapter import Adapter
+from clover.backbones.adapter import MOS_TUNA_BOTTLENECK_RATIO, Adapter, default_bottleneck_dim
 from clover.backbones.loader import resolve_base_model
 
 _LAYER_NAMES = ("down_proj", "up_proj")
@@ -80,7 +80,9 @@ class TunaAdapterViT(nn.Module):
     adapter recomputed after every experience's training.
     """
 
-    def __init__(self, base: nn.Module, bottleneck_dim: int = 8, scale: float = 0.1) -> None:
+    def __init__(
+        self, base: nn.Module, bottleneck_dim: Optional[int] = None, scale: float = 0.1
+    ) -> None:
         super().__init__()
         self.depth = len(base.blocks)  # type: ignore[arg-type]
         self.base = base
@@ -89,6 +91,11 @@ class TunaAdapterViT(nn.Module):
 
         feature_dim: int = base.feature_dim  # type: ignore[assignment]
         self.feature_dim = feature_dim
+        if bottleneck_dim is None:
+            # TUNA's published bottleneck (16, PILOT hardcodes this in
+            # init_adapters() -- its own `r: 16` config key is dead code
+            # upstream, see docs/methods.md) matches MOS's ratio.
+            bottleneck_dim = default_bottleneck_dim(feature_dim, MOS_TUNA_BOTTLENECK_RATIO)
         self._bottleneck_dim = bottleneck_dim
         self._scale = scale
 
@@ -169,7 +176,10 @@ class TunaAdapterViT(nn.Module):
 
 @register_backbone("vit_adapter_tuna")
 def vit_adapter_tuna(
-    base_model: str = "tiny_vit", bottleneck_dim: int = 8, scale: float = 0.1, **base_kwargs: Any
+    base_model: str = "tiny_vit",
+    bottleneck_dim: Optional[int] = None,
+    scale: float = 0.1,
+    **base_kwargs: Any,
 ) -> nn.Module:
     base = resolve_base_model(base_model, **base_kwargs)
     return TunaAdapterViT(base, bottleneck_dim=bottleneck_dim, scale=scale)
