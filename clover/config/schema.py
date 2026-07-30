@@ -11,6 +11,13 @@ from clover.training.trainer import OPTIMIZER_FACTORIES
 from clover.utils.strict_dict import reject_unknown_keys
 
 _AMP_VALUES = frozenset({"none", "bf16", "fp16"})
+
+#: Per-epoch learning-rate schedules (P11-C). ``constant`` means no
+#: scheduler at all; ``cosine`` is what 5 of the 9 published method configs
+#: use. Kept deliberately small -- a name here must be honoured by
+#: ``Trainer``'s scheduler factory, so adding one is a code change, not a
+#: config change.
+_SCHEDULER_VALUES = frozenset({"constant", "cosine"})
 _TASK_SIZES = frozenset({"fixed", "grow"})
 
 
@@ -37,10 +44,16 @@ class RunSection:
 
 @dataclass
 class OptimizerConfig:
+    """``weight_decay`` (P11-C) is carried because the published method
+    configs disagree on it by two orders of magnitude -- 0.0 for the prompt
+    family, 5e-4 for most of the adapter family, 0.05 for SimpleCIL -- so a
+    single shared value cannot represent a 9-method comparison."""
+
     name: str = "adam"
     lr: float = 1e-3
+    weight_decay: float = 0.0
 
-    _ALLOWED_KEYS = frozenset({"name", "lr"})
+    _ALLOWED_KEYS = frozenset({"name", "lr", "weight_decay"})
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "OptimizerConfig":
@@ -50,10 +63,13 @@ class OptimizerConfig:
             raise ValueError(
                 f"optimizer name must be one of {sorted(OPTIMIZER_FACTORIES)}, got {name!r}."
             )
-        return cls(name=name, lr=float(raw.get("lr", 1e-3)))
+        weight_decay = float(raw.get("weight_decay", 0.0))
+        if weight_decay < 0.0:
+            raise ValueError(f"weight_decay must be >= 0, got {weight_decay}.")
+        return cls(name=name, lr=float(raw.get("lr", 1e-3)), weight_decay=weight_decay)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"name": self.name, "lr": self.lr}
+        return {"name": self.name, "lr": self.lr, "weight_decay": self.weight_decay}
 
 
 @dataclass
@@ -74,8 +90,12 @@ class TrainingSection:
     optimizer: Optional[OptimizerConfig] = None
     amp: str = "none"
     cudnn_benchmark: bool = False
+    scheduler: str = "constant"
+    min_lr: float = 0.0
 
-    _ALLOWED_KEYS = frozenset({"epochs", "batch_size", "optimizer", "amp", "cudnn_benchmark"})
+    _ALLOWED_KEYS = frozenset(
+        {"epochs", "batch_size", "optimizer", "amp", "cudnn_benchmark", "scheduler", "min_lr"}
+    )
 
     def validate(self) -> None:
         if self.epochs < 1:
@@ -84,6 +104,12 @@ class TrainingSection:
             raise ValueError(f"batch_size must be >= 1, got {self.batch_size}.")
         if self.amp not in _AMP_VALUES:
             raise ValueError(f"amp must be one of {sorted(_AMP_VALUES)}, got {self.amp!r}.")
+        if self.scheduler not in _SCHEDULER_VALUES:
+            raise ValueError(
+                f"scheduler must be one of {sorted(_SCHEDULER_VALUES)}, got {self.scheduler!r}."
+            )
+        if self.min_lr < 0.0:
+            raise ValueError(f"min_lr must be >= 0, got {self.min_lr}.")
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "TrainingSection":
@@ -96,6 +122,8 @@ class TrainingSection:
             optimizer=optimizer,
             amp=str(raw.get("amp", "none")),
             cudnn_benchmark=bool(raw.get("cudnn_benchmark", False)),
+            scheduler=str(raw.get("scheduler", "constant")),
+            min_lr=float(raw.get("min_lr", 0.0)),
         )
         section.validate()
         return section
@@ -107,6 +135,8 @@ class TrainingSection:
             "optimizer": self.optimizer.to_dict() if self.optimizer else None,
             "amp": self.amp,
             "cudnn_benchmark": self.cudnn_benchmark,
+            "scheduler": self.scheduler,
+            "min_lr": self.min_lr,
         }
 
 
@@ -249,6 +279,12 @@ class MatrixSection:
     stream: Dict[str, Any] = field(default_factory=dict)
     training: Dict[str, Any] = field(default_factory=dict)
     method_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    #: Per-method ``training`` layering (P11-C). ``method_overrides`` reaches
+    #: only the *method* section, but the 9 published configs also disagree
+    #: on optimizer/lr/batch/schedule -- without this a matrix would run
+    #: every method at one shared learning rate, which is not a fair
+    #: comparison. Keys are validated per cell by ``TrainingSection``.
+    training_overrides: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     output_dir: str = "runs"
 
     _ALLOWED_KEYS = frozenset(
@@ -260,6 +296,7 @@ class MatrixSection:
             "stream",
             "training",
             "method_overrides",
+            "training_overrides",
             "output_dir",
         }
     )
@@ -278,6 +315,9 @@ class MatrixSection:
             stream=dict(raw.get("stream", {})),
             training=dict(raw.get("training", {})),
             method_overrides={k: dict(v) for k, v in raw.get("method_overrides", {}).items()},
+            training_overrides={
+                k: dict(v) for k, v in raw.get("training_overrides", {}).items()
+            },
             output_dir=str(raw.get("output_dir", "runs")),
         )
 

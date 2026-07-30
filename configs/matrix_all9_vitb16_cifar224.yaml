@@ -1,0 +1,93 @@
+# The real 9-method comparison: every method on a pretrained ViT-B/16,
+# CIFAR-100 @224, 7 scenarios x 3 seeds = 189 runs.
+#
+#   sbatch scripts/slurm_run.sh configs/matrix_all9_vitb16_cifar224.yaml
+#
+# Prefetch weights on the login node first (compute nodes shouldn't spend
+# GPU time downloading):
+#   python -c "import timm; timm.create_model('vit_base_patch16_224', pretrained=True)"
+#
+# TWO THINGS THIS CONFIG GETS RIGHT that matrix_full.yaml did not, and both
+# are required for the numbers to mean anything (see docs/real_backbones.md):
+#
+# 1. BACKBONE KEY. SimpleCIL has no mechanism wrapper, so its base IS its
+#    backbone (`backbone:`). The other eight keep their prompt/adapter
+#    mechanism and swap the base *underneath* it (`base_model:`). Setting
+#    `backbone:` on a wrapper method would silently delete the mechanism
+#    and degrade it to a linear probe.
+#
+# 2. PER-METHOD TRAINING. The published configs disagree by 30x on learning
+#    rate, 16x on batch size, and don't agree on the optimizer (6 SGD /
+#    3 Adam) or schedule. matrix_full.yaml applied one shared Adam/1.875e-3
+#    block to all nine -- MOS would have run at ~1/16 its published LR on
+#    the wrong optimizer. `training_overrides` fixes that per method.
+#
+# Values carried from LAMDA-PILOT's exps/*.json via the verified mirrors in
+# clover-pilot-bench/bench/configs/methods/*.yaml. Provenance per method is
+# recorded in docs/methods.md.
+methods:
+  - simplecil
+  - l2p
+  - dualprompt
+  - coda_prompt
+  - aper_adapter
+  - ranpac
+  - ease
+  - mos
+  - tuna
+scenarios:
+  - disjoint_baseline
+  - exact_replay
+  - partial_overlap
+  - long_range_revisit
+  - mid_range_revisit
+  - cumulative_drift
+  - distribution_shift
+datasets:
+  - cifar224
+seeds: [1, 2, 3]
+stream:
+  init_cls: 10
+  increment: 10
+  dataset_num_classes: 100
+
+method_overrides:
+  # SimpleCIL: plain forward contract, so the timm model IS the backbone.
+  simplecil:   {backbone: vit_base_patch16_224, pretrained: true}
+  # The other eight: keep the mechanism, swap the base underneath it.
+  l2p:          {base_model: vit_base_patch16_224, pretrained: true}
+  dualprompt:   {base_model: vit_base_patch16_224, pretrained: true}
+  coda_prompt:  {base_model: vit_base_patch16_224, pretrained: true}
+  aper_adapter: {base_model: vit_base_patch16_224, pretrained: true}
+  ranpac:       {base_model: vit_base_patch16_224, pretrained: true}
+  ease:         {base_model: vit_base_patch16_224, pretrained: true}
+  mos:          {base_model: vit_base_patch16_224, pretrained: true}
+  tuna:         {base_model: vit_base_patch16_224, pretrained: true}
+
+# Fallback for any method without an explicit override below.
+training:
+  epochs: 20
+  batch_size: 48
+  optimizer: {name: sgd, lr: 0.01, weight_decay: 0.0005}
+  scheduler: constant
+  min_lr: 0.0
+  amp: none
+
+training_overrides:
+  # simplecil is closed-form (published tuned_epoch: 0 -- no gradient loop
+  # at all); epochs must still be >= 1 for the schema, but no method code
+  # consumes it. Large batch is the published value and just makes the
+  # single prototype pass faster.
+  simplecil:    {epochs: 1, batch_size: 256, optimizer: {name: sgd, lr: 0.01, weight_decay: 0.05}}
+  l2p:          {epochs: 5,  batch_size: 16,  optimizer: {name: adam, lr: 0.001875, weight_decay: 0.0}, scheduler: constant}
+  dualprompt:   {epochs: 5,  batch_size: 24,  optimizer: {name: adam, lr: 0.001, weight_decay: 0.0},    scheduler: constant}
+  coda_prompt:  {epochs: 20, batch_size: 128, optimizer: {name: adam, lr: 0.001, weight_decay: 0.0},    scheduler: cosine}
+  aper_adapter: {epochs: 20, batch_size: 48,  optimizer: {name: sgd,  lr: 0.01, weight_decay: 0.0005},  scheduler: constant}
+  ranpac:       {epochs: 20, batch_size: 48,  optimizer: {name: sgd,  lr: 0.01, weight_decay: 0.0005},  scheduler: constant}
+  # ease's reference config has no tuned_epoch -- it uses init_epochs /
+  # later_epochs, both 20.
+  ease:         {epochs: 20, batch_size: 48,  optimizer: {name: sgd,  lr: 0.025, weight_decay: 0.0005}, scheduler: cosine}
+  mos:          {epochs: 20, batch_size: 48,  optimizer: {name: sgd,  lr: 0.03, weight_decay: 0.0005},  scheduler: cosine}
+  tuna:         {epochs: 15, batch_size: 16,  optimizer: {name: sgd,  lr: 0.01, weight_decay: 0.0005},  scheduler: cosine}
+
+output_dir: runs/matrix_all9_vitb16_cifar224

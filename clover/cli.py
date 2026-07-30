@@ -106,8 +106,11 @@ def _build_run_config(resolved: ResolvedConfig, run_dir: str, smoke: bool = Fals
         amp=resolved.training.amp != "none",
         optimizer_name=optimizer.name if optimizer else "adam",
         optimizer_lr=optimizer.lr if optimizer else 1e-3,
+        optimizer_weight_decay=optimizer.weight_decay if optimizer else 0.0,
         epochs=resolved.training.epochs,
         cudnn_benchmark=resolved.training.cudnn_benchmark,
+        scheduler=resolved.training.scheduler,
+        min_lr=resolved.training.min_lr,
     )
 
 

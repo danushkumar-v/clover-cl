@@ -90,6 +90,7 @@ class TUNA(CLMethod):
 
         trainable = list(self.backbone.cur_adapter.parameters()) + list(self.head.parameters())
         optimizer = ctx.optimizer_factory(trainable)
+        scheduler = ctx.make_scheduler(optimizer)
         for _epoch in range(ctx.epochs):
             for images, targets in loader:
                 images = images.to(ctx.device)
@@ -99,6 +100,8 @@ class TUNA(CLMethod):
                 loss = angular_margin_ce(logits, targets, exp.label_space, margin=self.margin)
                 loss.backward()
                 optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
 
         # Value-only update (merged_adapter's shape never changes) -- safe
         # here, unlike the backbone's structural growth in before_experience.

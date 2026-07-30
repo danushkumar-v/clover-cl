@@ -46,7 +46,18 @@ class TrainContext:
     method passes it, configured from ``training.optimizer`` (SPEC: "ctx
     provides... optimizer/scheduler factories from config"). Unexercised by
     SimpleCIL (no gradient step) but real plumbing for gradient-trained
-    methods. No scheduler factory yet -- no method needs one either.
+    methods.
+
+    ``scheduler_factory`` (P11-C) is the matching half: ``training.
+    scheduler`` selects a per-epoch learning-rate schedule, which 5 of the
+    9 published method configs use (cosine). It is a *factory over an
+    optimizer* rather than a ready scheduler because each method builds its
+    own optimizer over its own trainable subset. **The method must step it**
+    -- the Trainer does not own the epoch loop; every gradient-trained
+    method runs its own ``for _epoch in range(ctx.epochs)`` inside
+    ``train_experience``, so only the method can step a per-epoch schedule.
+    Use :meth:`make_scheduler` and call ``.step()`` at the end of each
+    epoch; ``None`` means a constant learning rate.
 
     ``epochs`` (from ``training.epochs``) was plumbed as a config field in
     P4 but never actually threaded through to a method -- SimpleCIL has no
@@ -59,6 +70,19 @@ class TrainContext:
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger("clover.training"))
     optimizer_factory: Optional[Callable[[Iterable[nn.Parameter]], torch.optim.Optimizer]] = None
     epochs: int = 1
+    scheduler_factory: Optional[
+        Callable[[torch.optim.Optimizer], Optional["torch.optim.lr_scheduler.LRScheduler"]]
+    ] = None
+
+    def make_scheduler(
+        self, optimizer: torch.optim.Optimizer
+    ) -> Optional["torch.optim.lr_scheduler.LRScheduler"]:
+        """Build this run's LR schedule for *optimizer*, or ``None`` for a
+        constant rate. Always safe to call: a run configured without a
+        scheduler simply yields ``None``."""
+        if self.scheduler_factory is None:
+            return None
+        return self.scheduler_factory(optimizer)
 
 
 class CLMethod(ABC):

@@ -78,6 +78,7 @@ class MOS(CLMethod):
 
         trainable = list(self.backbone.cur_adapter.parameters()) + list(self.head.parameters())
         optimizer = ctx.optimizer_factory(trainable)
+        scheduler = ctx.make_scheduler(optimizer)
         for _epoch in range(ctx.epochs):
             for images, targets in loader:
                 images = images.to(ctx.device)
@@ -88,6 +89,8 @@ class MOS(CLMethod):
                 loss.backward()
                 optimizer.step()
                 self.backbone.merge_step()
+            if scheduler is not None:
+                scheduler.step()
 
         self._update_prototypes_and_stats(exp, loader, ctx)
 

@@ -81,8 +81,11 @@ class RunConfig:
     amp: bool = False
     optimizer_name: str = "adam"
     optimizer_lr: float = 1e-3
+    optimizer_weight_decay: float = 0.0
     epochs: int = 1
     cudnn_benchmark: bool = False
+    scheduler: str = "constant"
+    min_lr: float = 0.0
 
 
 #: The one place optimizer names are mapped to classes -- clover/config's
@@ -214,11 +217,32 @@ class Trainer:
         device = torch.device(self.config.device)
         optimizer_cls = OPTIMIZER_FACTORIES[self.config.optimizer_name]
         optimizer_lr = self.config.optimizer_lr
+        weight_decay = self.config.optimizer_weight_decay
+        epochs = self.config.epochs
+        min_lr = self.config.min_lr
+
+        def _make_scheduler(
+            optimizer: torch.optim.Optimizer,
+        ) -> Optional[torch.optim.lr_scheduler.LRScheduler]:
+            # T_max is the per-experience epoch count: each experience
+            # restarts its own optimizer (over its own trainable subset),
+            # so the schedule anneals within an experience, not across the
+            # stream -- matching PILOT, whose scheduler is likewise rebuilt
+            # per task.
+            if self.config.scheduler == "cosine":
+                return torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer, T_max=max(1, epochs), eta_min=min_lr
+                )
+            return None
+
         ctx = TrainContext(
             device=device,
             amp=self.config.amp,
-            optimizer_factory=lambda params: optimizer_cls(params, lr=optimizer_lr),
-            epochs=self.config.epochs,
+            optimizer_factory=lambda params: optimizer_cls(
+                params, lr=optimizer_lr, weight_decay=weight_decay
+            ),
+            epochs=epochs,
+            scheduler_factory=_make_scheduler,
         )
 
         stream_info = StreamInfo(

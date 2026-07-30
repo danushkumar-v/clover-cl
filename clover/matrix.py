@@ -65,11 +65,25 @@ def cell_config(matrix: MatrixSection, cell: MatrixCell) -> Dict[str, Any]:
 
     method_cfg = {"name": cell.method, **matrix.method_overrides.get(cell.method, {})}
 
+    # Per-method training layering (P11-C). The 9 published method configs
+    # disagree on optimizer (6 SGD / 3 Adam), learning rate (30x spread),
+    # batch size (16x) and schedule, so one shared `training` block cannot
+    # express a faithful 9-method matrix. `optimizer` is merged key-wise
+    # rather than replaced, so an override may set just `lr` without having
+    # to restate the optimizer's name.
+    training = dict(matrix.training)
+    override = matrix.training_overrides.get(cell.method, {})
+    if override:
+        merged_optimizer = {**training.get("optimizer", {}), **override.get("optimizer", {})}
+        training.update({k: v for k, v in override.items() if k != "optimizer"})
+        if merged_optimizer:
+            training["optimizer"] = merged_optimizer
+
     return {
         "run": {"name": cell.run_id, "seed": cell.seed, "output_dir": matrix.output_dir},
         "stream": stream,
         "method": method_cfg,
-        "training": dict(matrix.training),
+        "training": training,
     }
 
 

@@ -39,8 +39,52 @@ def test_configs_directory_has_the_expected_shipped_files():
         "matrix_full.yaml",
         "matrix_simplecil_vitb16.yaml",
         "matrix_simplecil_vitb16_inr.yaml",
+        "matrix_all9_vitb16_cifar224.yaml",
+        "matrix_all9_vitb16_inr.yaml",
         "pilot_gpu_mos.yaml",
     }
+
+
+def test_the_9_method_matrices_give_every_method_its_own_published_training_block():
+    """P11-C: the whole point of these two configs is that a shared
+    ``training`` block cannot represent a 9-method comparison -- the
+    published configs disagree on optimizer, LR (30x), batch (16x) and
+    schedule. Validated offline via ``dataset_num_classes``, so this needs
+    neither CIFAR-100 nor a staged ImageNet-R.
+    """
+    for name in ("matrix_all9_vitb16_cifar224", "matrix_all9_vitb16_inr"):
+        matrix = MatrixSection.from_dict(load_yaml(os.path.join(_CONFIGS_DIR, f"{name}.yaml")))
+        assert len(matrix.methods) == 9
+        cells = enumerate_cells(matrix)
+        assert len(cells) == 9 * 7 * 3
+
+        seen: dict = {}
+        for cell in cells:
+            resolved = resolve_config(cell_config(matrix, cell))
+            assert resolved.training.optimizer is not None
+            seen[cell.method] = (
+                resolved.training.optimizer.name,
+                resolved.training.optimizer.lr,
+                resolved.training.batch_size,
+                resolved.training.scheduler,
+            )
+
+        # every method carries a distinct, published training setup
+        assert seen["mos"] == ("sgd", 0.03, 48, "cosine")
+        assert seen["l2p"] == ("adam", 0.001875, 16, "constant")
+        assert seen["coda_prompt"] == ("adam", 0.001, 128, "cosine")
+        assert seen["ease"] == ("sgd", 0.025, 48, "cosine")
+        # both optimizers are genuinely in use across the 9
+        assert {v[0] for v in seen.values()} == {"sgd", "adam"}
+
+        # SimpleCIL's base IS its backbone; the other 8 keep their mechanism
+        # and swap the base underneath -- using the wrong key silently
+        # deletes the mechanism.
+        assert "backbone" in matrix.method_overrides["simplecil"]
+        for method in matrix.methods:
+            if method != "simplecil":
+                assert "base_model" in matrix.method_overrides[method], method
+                assert "backbone" not in matrix.method_overrides[method], method
 
 
 def test_every_shipped_single_run_config_passes_preflight(patched_cifar100, tmp_path, capsys):

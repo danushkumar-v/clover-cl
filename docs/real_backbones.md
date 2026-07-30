@@ -106,12 +106,56 @@ the published methods. Fix: derive every such constant from the base
 model's own `depth`/`feature_dim`, defaulting to the published value at
 ViT-B/16 scale.
 
-**3. Training hyperparameters.** The safety gate uses `epochs=40`,
-`lr=3e-2` — values found empirically to make a *randomly initialised*
-TinyViT converge on synthetic 8×8 images, and documented as such. They are
-actively harmful for a pretrained ViT. Fix: per-method defaults carried as
-data from the verified LAMDA-PILOT mirrors in the private bench repo
-(`bench/configs/methods/*.yaml`), with provenance recorded per method.
+**3. Training hyperparameters.** *(landed, P11-C.)* The safety gate uses
+`epochs=40`, `lr=3e-2` — values found empirically to make a *randomly
+initialised* TinyViT converge on synthetic 8×8 images, and documented as
+such. They are actively harmful for a pretrained ViT.
+
+This turned out to be the layer with the sharpest teeth, because it fails
+*silently*. The nine published configs disagree far more than expected:
+
+| | spread across the 9 |
+|---|---|
+| optimizer | SGD (6 methods) vs Adam (3) |
+| learning rate | 0.001 → 0.03 (**30×**) |
+| batch size | 16 → 256 (**16×**) |
+| weight decay | 0.0 → 0.05 |
+| schedule | cosine (5) / constant (2) / none |
+
+`configs/matrix_full.yaml` applied one shared `{adam, lr 1.875e-3,
+epochs 5, batch 16}` block to all nine — so MOS, published as SGD at 0.03,
+would have trained on the wrong optimizer at roughly 1/16 its intended
+learning rate. **That invalidates a 9-method comparison on its own,
+independently of the backbone problem above**, and unlike chance-level
+accuracy it would not announce itself: the numbers would look plausible.
+
+The config layer could not express the fix. Two gaps, both now closed:
+
+- **Missing knobs.** `TrainingSection` gained `scheduler`
+  (`constant`/`cosine`) and `min_lr`; `OptimizerConfig` gained
+  `weight_decay`. `Trainer` builds a `CosineAnnealingLR` with
+  `T_max=epochs`, annealing *within* an experience — each experience
+  restarts its own optimizer over its own trainable subset, which matches
+  PILOT, where the scheduler is likewise rebuilt per task.
+- **No per-method training block.** `MatrixSection.method_overrides`
+  reaches only the *method* section, so every cell of a matrix shared one
+  `training` block. New `training_overrides` layers per method, merging
+  `optimizer` key-wise so an override can set just `lr` without restating
+  the optimizer's name.
+
+One structural note worth recording: **the Trainer does not own the epoch
+loop.** Every gradient-trained method runs its own
+`for _epoch in range(ctx.epochs)` inside `train_experience`, so a per-epoch
+schedule can only be stepped by the method. Hence
+`TrainContext.make_scheduler(optimizer)`, called at each of the five epoch
+loops (`prompt_common`, `adapter_common`, `ease`, `mos`, `tuna` —
+SimpleCIL needs none, being closed-form). A scheduler that were built but
+never stepped would be a silent no-op, so a test pins that stepping it
+actually anneals the learning rate.
+
+The published values ship in `configs/matrix_all9_vitb16_cifar224.yaml` and
+`configs/matrix_all9_vitb16_inr.yaml`, with provenance per method in
+`docs/methods.md`.
 
 ## Per-method change log
 

@@ -122,6 +122,7 @@ class PromptMethodBase(CLMethod):
             p for p in self.backbone.parameters() if p.requires_grad
         ] + list(self.head.parameters())
         optimizer = ctx.optimizer_factory(trainable_params)
+        scheduler = ctx.make_scheduler(optimizer)
 
         for _epoch in range(ctx.epochs):
             for images, targets in loader:
@@ -135,6 +136,8 @@ class PromptMethodBase(CLMethod):
                 )
                 loss.backward()
                 optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
 
     def classifier(self) -> nn.Module:
         assert self.backbone is not None and self.head is not None

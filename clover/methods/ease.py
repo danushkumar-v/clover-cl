@@ -79,6 +79,7 @@ class EASE(CLMethod):
 
         trainable = list(self.backbone.cur_adapter.parameters()) + list(self._proxy_head.parameters())
         optimizer = ctx.optimizer_factory(trainable)
+        scheduler = ctx.make_scheduler(optimizer)
         for _epoch in range(ctx.epochs):
             for images, targets in loader:
                 images = images.to(ctx.device)
@@ -88,6 +89,8 @@ class EASE(CLMethod):
                 loss = new_class_ce(logits, targets, exp.label_space)
                 loss.backward()
                 optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
 
         self._update_head(exp, loader, ctx)
 
