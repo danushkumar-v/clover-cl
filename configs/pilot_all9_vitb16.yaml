@@ -1,0 +1,77 @@
+# GPU PILOT -- run this BEFORE either 189-cell matrix.
+#
+#   sbatch --time=02:00:00 scripts/slurm_run.sh configs/pilot_all9_vitb16.yaml
+#
+# All 9 methods x 1 scenario x 1 seed = 9 short runs on a real pretrained
+# ViT-B/16. Purpose is shape/device/wiring correctness on CUDA, NOT accuracy:
+# `epochs: 1` everywhere, so this finishes in minutes rather than hours.
+#
+# Why it exists: every CUDA bug this project has hit was invisible on CPU and
+# only surfaced on the cluster -- the worst cost a 5-hour job when EASE's and
+# TUNA's grow() allocated adapters on the wrong device. A 9-cell pilot
+# exercises every method's real device path first.
+#
+# The scenario is cumulative_drift deliberately: it is the only scenario with
+# same-id revisits, so it also exercises the revisit-safe loss path (the
+# masked-logit bug class) rather than just the echo path.
+#
+# Expected: 9/9 runs reach state "done" in runs/pilot_all9_vitb16/*/status.json
+# with finite (non-NaN) A_t and AIA in per_task.csv. Accuracy will be poor --
+# one epoch proves nothing about learning, only about plumbing.
+#
+# Prefetch weights on the login node first:
+#   python -c "import timm; timm.create_model('vit_base_patch16_224', pretrained=True)"
+methods:
+  - simplecil
+  - l2p
+  - dualprompt
+  - coda_prompt
+  - aper_adapter
+  - ranpac
+  - ease
+  - mos
+  - tuna
+scenarios:
+  - cumulative_drift
+datasets:
+  - cifar224
+seeds: [1]
+stream:
+  init_cls: 10
+  increment: 10
+  dataset_num_classes: 100
+
+method_overrides:
+  simplecil:   {backbone: vit_base_patch16_224, pretrained: true}
+  l2p:          {base_model: vit_base_patch16_224, pretrained: true}
+  dualprompt:   {base_model: vit_base_patch16_224, pretrained: true}
+  coda_prompt:  {base_model: vit_base_patch16_224, pretrained: true}
+  aper_adapter: {base_model: vit_base_patch16_224, pretrained: true}
+  ranpac:       {base_model: vit_base_patch16_224, pretrained: true}
+  ease:         {base_model: vit_base_patch16_224, pretrained: true}
+  mos:          {base_model: vit_base_patch16_224, pretrained: true}
+  tuna:         {base_model: vit_base_patch16_224, pretrained: true}
+
+# One epoch for every method -- this is a plumbing check, not a training run.
+# Batch sizes and optimizers stay at their published values so the pilot
+# exercises the same code paths (and the same GPU memory footprint) the real
+# matrix will.
+training:
+  epochs: 1
+  batch_size: 48
+  optimizer: {name: sgd, lr: 0.01, weight_decay: 0.0005}
+  scheduler: constant
+  amp: none
+
+training_overrides:
+  simplecil:    {batch_size: 256, optimizer: {name: sgd, lr: 0.01, weight_decay: 0.05}}
+  l2p:          {batch_size: 16,  optimizer: {name: adam, lr: 0.001875, weight_decay: 0.0}}
+  dualprompt:   {batch_size: 24,  optimizer: {name: adam, lr: 0.001, weight_decay: 0.0}}
+  coda_prompt:  {batch_size: 128, optimizer: {name: adam, lr: 0.001, weight_decay: 0.0}, scheduler: cosine}
+  aper_adapter: {batch_size: 48,  optimizer: {name: sgd,  lr: 0.01, weight_decay: 0.0005}}
+  ranpac:       {batch_size: 48,  optimizer: {name: sgd,  lr: 0.01, weight_decay: 0.0005}}
+  ease:         {batch_size: 48,  optimizer: {name: sgd,  lr: 0.025, weight_decay: 0.0005}, scheduler: cosine}
+  mos:          {batch_size: 48,  optimizer: {name: sgd,  lr: 0.03, weight_decay: 0.0005},  scheduler: cosine}
+  tuna:         {batch_size: 16,  optimizer: {name: sgd,  lr: 0.01, weight_decay: 0.0005},  scheduler: cosine}
+
+output_dir: runs/pilot_all9_vitb16

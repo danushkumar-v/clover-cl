@@ -17,12 +17,20 @@ from clover.config import load_yaml, resolve_config
 from clover.config.schema import MatrixSection
 from clover.core.planner import resolve as resolve_plan
 from clover.matrix import cell_config, enumerate_cells
+from clover.methods import list_methods
 
 _CONFIGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "configs")
+def _is_matrix(path: str) -> bool:
+    """A matrix config is one with a top-level ``methods:`` list -- the same
+    test ``scripts/slurm_run.sh`` uses to pick ``run-matrix`` over ``run``.
+    Detecting by content rather than filename means a new config is
+    classified correctly whatever it is called (an earlier filename-prefix
+    rule mis-read ``pilot_all9_vitb16.yaml`` as a single-run config)."""
+    return "methods" in (load_yaml(path) or {})
+
+
 _SINGLE_RUN_CONFIGS = sorted(
-    p
-    for p in glob.glob(os.path.join(_CONFIGS_DIR, "*.yaml"))
-    if not os.path.basename(p).startswith("matrix_")
+    p for p in glob.glob(os.path.join(_CONFIGS_DIR, "*.yaml")) if not _is_matrix(p)
 )
 
 
@@ -41,8 +49,25 @@ def test_configs_directory_has_the_expected_shipped_files():
         "matrix_simplecil_vitb16_inr.yaml",
         "matrix_all9_vitb16_cifar224.yaml",
         "matrix_all9_vitb16_inr.yaml",
+        "pilot_all9_vitb16.yaml",
         "pilot_gpu_mos.yaml",
     }
+
+
+def test_the_gpu_pilot_covers_every_method_in_one_short_run():
+    """The pilot exists to catch CUDA-only failures before a 189-cell job
+    (every device bug this project hit was invisible on CPU). It is only
+    useful if it actually exercises all 9 methods and stays short."""
+    matrix = MatrixSection.from_dict(
+        load_yaml(os.path.join(_CONFIGS_DIR, "pilot_all9_vitb16.yaml"))
+    )
+    assert set(matrix.methods) == set(list_methods())
+    assert len(enumerate_cells(matrix)) == 9  # 9 methods x 1 scenario x 1 seed
+    # cumulative_drift is the only same-id-revisit scenario, so the pilot
+    # also covers the revisit-safe loss path, not just the echo path.
+    assert matrix.scenarios == ["cumulative_drift"]
+    for cell in enumerate_cells(matrix):
+        assert resolve_config(cell_config(matrix, cell)).training.epochs == 1
 
 
 def test_the_9_method_matrices_give_every_method_its_own_published_training_block():
