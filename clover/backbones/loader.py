@@ -11,6 +11,7 @@ from typing import Any
 import torch.nn as nn
 
 from clover.backbones import get_backbone, list_backbones
+from clover.backbones.timm_vit import wrap_timm_vit
 
 
 def resolve_base_model(
@@ -60,4 +61,9 @@ def resolve_base_model(
     # `.num_features`. Normalize here -- the one place resolution happens --
     # so every caller can rely on `.feature_dim` regardless of source.
     model.feature_dim = model.num_features
-    return model
+    # A stock timm ViT has no forward_tokens/query_features and its attention
+    # takes no key/value prefix, so the prompt/adapter wrapper mechanisms
+    # cannot splice into it. Wrapping restores CLOVER's hook surface over
+    # timm's own (pretrained) submodules; non-ViT models pass through
+    # unchanged and stay usable by plain forward(x) methods like SimpleCIL.
+    return wrap_timm_vit(model)

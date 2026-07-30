@@ -8,7 +8,7 @@ config (after scenario resolution) is what gets written to the run dir as
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 
@@ -58,15 +58,52 @@ def load_yaml(path: str) -> Dict[str, Any]:
     return data
 
 
+def resolve_dataset_num_classes(
+    dataset: str, data_root: str = "./data", declared: Optional[int] = None
+) -> int:
+    """Class count for a configured dataset, without requiring its data.
+
+    ``stream.dataset_num_classes`` was introduced for config-only datasets
+    (SPEC §7: ``image_folder``), which can't be constructed at all without
+    it. It doubles as the **offline-validation** path for named datasets:
+    resolving a config otherwise instantiates the dataset purely to read
+    ``num_classes``, so a config naming an unstaged dataset (``imagenet_r``
+    on a laptop that only submits cluster jobs) couldn't be validated at
+    all. Declaring the count keeps ``clover preflight``/``inspect`` usable.
+
+    The declaration stands in for absent data; it is never an override.
+    ``clover run`` re-reads the count from the dataset it actually loads
+    and rejects a mismatch, so a stale declaration can't silently reshape
+    a real run's stream.
+
+    Args:
+        dataset: Registered dataset name.
+        data_root: Where the data would be staged.
+        declared: ``stream.dataset_num_classes``, if the config set it.
+
+    Returns:
+        The number of classes in the dataset.
+
+    Raises:
+        FileNotFoundError: Data isn't staged and no count was declared.
+        ValueError: The dataset needs a declared count and none was given.
+    """
+    if declared is not None:
+        return int(declared)
+    dataset_cls = get_dataset(dataset)
+    try:
+        return int(dataset_cls(root=data_root).num_classes)
+    except (FileNotFoundError, ValueError) as exc:
+        raise type(exc)(
+            f"{exc} To validate this config without the data staged locally, "
+            "declare the class count as stream.dataset_num_classes."
+        ) from None
+
+
 def _resolve_stream_spec(stream: StreamSection) -> StreamSpec:
-    dataset_cls = get_dataset(stream.dataset)
-    if stream.dataset_num_classes is not None:
-        # Config-only datasets (SPEC §7: image_folder) can't be
-        # constructed with zero args at all -- the count is declared
-        # directly instead of read off a constructed instance.
-        num_classes = stream.dataset_num_classes
-    else:
-        num_classes = dataset_cls(root=stream.data_root).num_classes
+    num_classes = resolve_dataset_num_classes(
+        stream.dataset, stream.data_root, stream.dataset_num_classes
+    )
     info = DatasetInfo(stream.dataset, num_classes)
 
     if stream.scenario is not None:
@@ -121,6 +158,9 @@ def resolve_config(raw: Dict[str, Any], smoke: bool = False) -> ResolvedConfig:
             dataset=_SMOKE_DATASET,
             init_cls=_SMOKE_INIT_CLS,
             increment=_SMOKE_INCREMENT,
+            # The declared count described the *replaced* dataset. Carrying
+            # it over would describe synthetic with imagenet_r's 200 classes.
+            dataset_num_classes=None,
         )
         training = replace(training, epochs=_SMOKE_EPOCHS, batch_size=_SMOKE_BATCH_SIZE)
 

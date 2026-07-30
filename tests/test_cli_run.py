@@ -7,10 +7,14 @@ import logging
 import os
 from unittest.mock import patch
 
+import numpy as np
+import pytest
 import yaml
+from PIL import Image
 
-from clover.cli import _build_run_config, main
+from clover.cli import _build_run_config, _construct_dataset, main
 from clover.config import resolve_config
+from clover.core.spec import StreamSpec
 
 
 def _write_config(tmp_path, output_dir, **stream_overrides):
@@ -182,3 +186,39 @@ def test_run_with_typoed_key_fails_cleanly_before_any_run_dir(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "incrament" in err
     assert "increment" in err
+
+
+# --- dataset construction vs. the offline class-count declaration -------
+
+
+def test_declared_class_count_does_not_reach_a_named_datasets_constructor(tmp_path):
+    """``stream.dataset_num_classes`` is a constructor argument only for
+    config-only datasets (``image_folder``). A named dataset owns its count
+    and its ``__init__`` takes none, so forwarding the declaration raised
+    ``TypeError`` -- a config using the field to validate offline passed
+    ``clover preflight`` on a dev box and then died on the cluster, where
+    the data *is* staged."""
+    spec = StreamSpec(dataset="synthetic", init_cls=4, increment=4, dataset_num_classes=20)
+    dataset = _construct_dataset(spec, train=True)
+    assert dataset.num_classes == 20
+
+
+def test_a_stale_declared_class_count_is_rejected_against_the_real_dataset(tmp_path):
+    """The declaration stands in for absent data; it never overrides it."""
+    spec = StreamSpec(dataset="synthetic", init_cls=4, increment=4, dataset_num_classes=13)
+    with pytest.raises(ValueError, match="contradicts"):
+        _construct_dataset(spec, train=True)
+
+
+def test_config_only_dataset_still_receives_its_declared_count(tmp_path):
+    root = tmp_path / "folder_data"
+    for split in ("train", "test"):
+        for class_name in ("a", "b"):
+            class_dir = root / split / class_name
+            class_dir.mkdir(parents=True)
+            Image.fromarray(np.zeros((8, 8, 3), dtype=np.uint8)).save(class_dir / "0.png")
+
+    spec = StreamSpec(
+        dataset="image_folder", init_cls=1, increment=1, data_root=str(root), dataset_num_classes=2
+    )
+    assert _construct_dataset(spec, train=True).num_classes == 2

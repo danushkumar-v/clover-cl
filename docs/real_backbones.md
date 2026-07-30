@@ -44,16 +44,44 @@ one.
 Wiring a real backbone in is not a single patch. Three independent things
 were sized for TinyViT:
 
-**1. The hook surface.** `TinyViT` exposes `patch_tokens`,
-`query_features`, `forward_tokens(tokens, prefix_kv=, adapter=)` and
-`forward(x, prompt_tokens=, prefix_kv=, adapter=)`. timm exposes none of
-them. Fix: a wrapper that re-implements timm's block and attention forward
-*using timm's own submodules* — so pretrained weights load and behave
-normally — with the two hook points inserted at exactly the positions
-`TinyViT` uses. Semantic fidelity is the bar: the adapter branch reads the
-post-attention residual stream (not `norm2(x)`), and `prefix_kv` is
-concatenated onto K/V after the q/k norms with queries untouched. A method
-must be structurally identical on both backbones; only scale differs.
+**1. The hook surface.** *(landed, P11-A.)* `TinyViT` exposes
+`patch_tokens`, `query_features`, `forward_tokens(tokens, prefix_kv=,
+adapter=)` and `forward(x, prompt_tokens=, prefix_kv=, adapter=)`. timm
+exposes none of them. Fix: `clover/backbones/timm_vit.py:TimmViTHooks`,
+which re-expresses timm's block and attention forward *through timm's own
+submodules* — so pretrained weights load and behave normally — with the two
+hook points inserted at exactly the positions `TinyViT` uses.
+`resolve_base_model` applies it automatically to any ViT-shaped timm model;
+anything else passes through untouched.
+
+Semantic fidelity is the bar, and three properties are pinned by test:
+a hook-free forward reproduces timm's own `forward` exactly; the adapter
+branch reads the post-attention residual stream (not `norm2(x)`); and
+`prefix_kv` is concatenated onto K/V after the q/k norms with queries
+untouched, so the output sequence length never changes. A method is
+structurally identical on both backbones; only scale differs.
+
+Four consequences worth knowing:
+
+- The wrapper owns the timm model as a submodule, so backbone `state_dict`
+  keys gain a `base.` prefix — a checkpoint written before this change
+  cannot be resumed by a run after it.
+- `TimmViTHooks` pools the class token (matching `TinyViT`) rather than
+  honouring a base's `global_pool="avg"`.
+- `query_features` mean-pools raw patch-embedding output, exactly as
+  `TinyViT` does. That is the right call for the *backbone* layer — the
+  mechanism must not change with the base — but on a pretrained ViT it
+  means prompt selection sees only the patch-embed convolution, not the 12
+  pretrained blocks. L2P/DualPrompt's published query is a full frozen
+  forward's class token; whether to switch is a per-method decision.
+- A `base_model: vit_*_224` config cannot be run under `--profile smoke`.
+  Smoke substitutes the 8×8 synthetic dataset but keeps the method block,
+  and a 224-resolution timm model rejects an 8×8 input. `resolve_base_model`
+  deliberately drops CLOVER's `input_size` for timm models (a timm model's
+  resolution comes from its own pretrained config), and overriding
+  `img_size` alone wouldn't help — patch 16 doesn't tile an 8×8 image.
+  A smoke-clean example config therefore has to leave `base_model` at its
+  `tiny_vit` default.
 
 **2. Scale-dependent structural defaults.** Several methods carry constants
 that are only meaningful at TinyViT's dimensions. DualPrompt's default
@@ -104,7 +132,26 @@ method: {name: l2p, base_model: vit_base_patch16_224, pretrained: true}
 Setting `backbone:` on a wrapper method replaces the whole mechanism with a
 bare ViT — the prompt pool or adapter stack silently disappears, and the
 method degenerates to a linear probe. The shipped configs use the correct
-key per method; if you write your own, check this first.
+key per method; if you write your own, check this first. The safety gate
+derives the right key per method from the backbone factory's signature
+(`base_model` present ⇒ it's a mechanism wrapper), so a new method is
+classified automatically rather than added to a list.
+
+### Validating a config for a dataset you don't have
+
+Resolving a config instantiates the dataset purely to read `num_classes`,
+so a config naming an unstaged dataset couldn't be checked at all on a
+machine without that data — i.e. on the GPU-less box where configs are
+actually written. Declare the count and `clover preflight` / `clover
+inspect` work offline:
+
+```yaml
+stream: {dataset: imagenet_r, dataset_num_classes: 200, init_cls: 20, increment: 20}
+```
+
+The declaration stands in for absent data, never overriding it: `clover
+run` reads the count from the dataset it actually loads and rejects a
+declaration that contradicts it.
 
 ## Parameter budget at ViT-B/16 scale
 

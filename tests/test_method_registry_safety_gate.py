@@ -12,19 +12,32 @@ registry" -- add a method, it's covered here with no test-file changes.
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 import torch
+from torch.utils.data import DataLoader, TensorDataset
 
+from clover.backbones import get_backbone
+from clover.backbones.timm_vit import TimmViTHooks
 from clover.core.spec import DatasetInfo
 from clover.core.stream import build_benchmark
 from clover.datasets.synthetic import SyntheticDataset
 from clover.methods import get_method, list_methods
+from clover.methods.base import StreamInfo, TrainContext
 from clover.scenarios import get_scenario, list_scenarios
 from clover.training import RunConfig, Trainer
 
 NUM_CLASSES = 20
 INIT_CLS = 4
 INCREMENT = 4
+
+#: Smallest real timm ViT: the same `Block`/`Attention` classes and the same
+#: 12-block structure as ViT-B/16, at 1/16 the width. `pretrained=False`
+#: builds the architecture only -- no download, no network, CPU-only.
+REAL_TIMM_BASE = "vit_tiny_patch16_224"
+REAL_INPUT_SIZE = 224
+REAL_CHANNELS = 3
 
 
 def _build_benchmark(scenario_name, train_ds, test_ds):
@@ -87,3 +100,86 @@ def test_registered_method_passes_revisit_safety_gate(tmp_path, method_name, sce
         preds = classifier(images).argmax(dim=-1)
     accuracy = (preds == targets).float().mean().item()
     assert accuracy > 1 / NUM_CLASSES, f"{method_name}/{scenario_name}: revisit accuracy at chance"
+
+
+# --- the same gate, on a real timm ViT (P11-A) --------------------------
+
+
+def _base_model_key(method_cls: type) -> str:
+    """``backbone:`` or ``base_model:`` for this method, read off the
+    registry rather than a hardcoded list, so a new method is classified
+    automatically.
+
+    A method whose ``default_backbone`` is a *mechanism wrapper* (prompt
+    pool, prefix, adapter stack) takes ``base_model``, which swaps the base
+    underneath the mechanism. A method whose default is a plain base model
+    (SimpleCIL) takes ``backbone``: its base *is* its backbone. Getting this
+    backwards silently deletes the mechanism and degrades the method to a
+    linear probe -- it doesn't crash, which is exactly why it's derived here
+    instead of written down twice.
+    """
+    factory = get_backbone(method_cls.default_backbone)
+    return "base_model" if "base_model" in inspect.signature(factory).parameters else "backbone"
+
+
+def _real_base_loader(classes, generator):
+    targets = torch.tensor([c for c in classes for _ in range(2)])
+    images = torch.randn(
+        len(targets), REAL_CHANNELS, REAL_INPUT_SIZE, REAL_INPUT_SIZE, generator=generator
+    )
+    return DataLoader(TensorDataset(images, targets), batch_size=4), images
+
+
+@pytest.mark.parametrize("method_name", sorted(list_methods()))
+def test_registered_method_is_finite_on_a_real_timm_base(method_name, make_experience):
+    """Every method must also survive a *real* timm ViT, not just TinyViT.
+
+    The 6-scenario x 40-epoch product above stays on TinyViT: it asserts
+    above-chance accuracy, which needs a learnable dataset and a budget no
+    12-block ViT can be given on CPU. This companion gate keeps the same
+    registry-driven coverage (every method, automatically) and the same
+    revisit shape -- experience 1 re-presents class 0 as a same-id revisit --
+    but asserts only what a real backbone can be held to offline: the
+    mechanism splices in, the whole lifecycle runs, and every parameter and
+    logit stays finite.
+    """
+    method_cls = get_method(method_name)
+    method = method_cls()
+    stream_info = StreamInfo(
+        dataset="synthetic",
+        nb_experiences=2,
+        total_classes=4,
+        input_size=REAL_INPUT_SIZE,
+        channels=REAL_CHANNELS,
+    )
+    key = _base_model_key(method_cls)
+    method.build(stream_info, {key: REAL_TIMM_BASE, "pretrained": False})
+    if key == "base_model":
+        # Guards the footgun the key distinction exists for: had `backbone:`
+        # been used, this would be a bare ViT and the mechanism -- the thing
+        # under test -- would be silently gone, with everything still green.
+        assert not isinstance(method.backbone, TimmViTHooks), f"{method_name}: mechanism dropped"
+
+    ctx = TrainContext(
+        device=torch.device("cpu"),
+        optimizer_factory=lambda params: torch.optim.Adam(params, lr=1e-3),
+        epochs=1,
+    )
+    generator = torch.Generator().manual_seed(42)
+
+    # Experience 1 re-presents class 0 under its original id -- the same-id
+    # revisit shape the TinyViT gate above exercises across every scenario.
+    for task_label, (classes, seen) in enumerate([([0, 1], set()), ([0, 2, 3], {0, 1})]):
+        exp = make_experience(task_label, classes, seen, head_size=2 + 2 * task_label)
+        loader, images = _real_base_loader(classes, generator)
+        method.before_experience(exp, ctx)
+        method.train_experience(exp, loader, ctx)
+        method.after_experience(exp, ctx)
+
+        classifier = method.classifier()
+        for p in classifier.parameters():
+            assert torch.isfinite(p).all(), f"{method_name}: non-finite param after exp {task_label}"
+        with torch.no_grad():
+            logits = classifier(images)
+        assert logits.shape == (len(images), exp.label_space.head_size)
+        assert torch.isfinite(logits).all(), f"{method_name}: non-finite logits after exp {task_label}"

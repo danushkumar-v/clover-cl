@@ -5,6 +5,7 @@ run-matrix (SPEC §9, §10-§11).
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 import math
 import os
@@ -17,7 +18,13 @@ from typing import Any, Optional
 import torch
 from torchvision import transforms
 
-from clover.config import MatrixSection, ResolvedConfig, load_yaml, resolve_config
+from clover.config import (
+    MatrixSection,
+    ResolvedConfig,
+    load_yaml,
+    resolve_config,
+    resolve_dataset_num_classes,
+)
 from clover.core.planner import resolve as resolve_plan
 from clover.core.spec import DatasetInfo, StreamSpec
 from clover.core.stream import build_benchmark
@@ -34,13 +41,37 @@ _SMOKE_METHOD_INCREMENT = 4
 def _dataset_info(
     dataset_name: str, root: str = "./data", num_classes: Optional[int] = None
 ) -> DatasetInfo:
-    if num_classes is None:
-        # Config-only datasets (SPEC §7: image_folder) can't be
-        # constructed with zero args at all -- callers with a declared
-        # count pass it directly instead of relying on this fallback.
-        dataset_cls = get_dataset(dataset_name)
-        num_classes = dataset_cls(root=root).num_classes
-    return DatasetInfo(dataset_name, num_classes)
+    return DatasetInfo(dataset_name, resolve_dataset_num_classes(dataset_name, root, num_classes))
+
+
+def _construct_dataset(spec: StreamSpec, train: bool) -> Any:
+    """Build the configured dataset for one split.
+
+    ``stream.dataset_num_classes`` is a *constructor argument* only for
+    config-only datasets (``image_folder``), which have no built-in count.
+    A named dataset owns its count and its ``__init__`` doesn't accept one,
+    so passing it through unconditionally raised ``TypeError`` -- meaning a
+    config that used the field as an offline-validation declaration passed
+    ``clover preflight`` on a dev box and then died on the cluster, where
+    the data *is* staged. Here the staged dataset is the source of truth
+    and a stale declaration is a hard error, not a silent override.
+    """
+    dataset_cls = get_dataset(spec.dataset)
+    declared = spec.dataset_num_classes
+    takes_num_classes = "num_classes" in inspect.signature(dataset_cls).parameters
+
+    kwargs: dict[str, Any] = {"root": spec.data_root}
+    if declared is not None and takes_num_classes:
+        kwargs["num_classes"] = declared
+    dataset = dataset_cls(train=train, **kwargs)
+
+    if declared is not None and not takes_num_classes and dataset.num_classes != declared:
+        raise ValueError(
+            f"stream.dataset_num_classes={declared} contradicts {spec.dataset}'s own "
+            f"class count ({dataset.num_classes}). That field declares the count so a "
+            "config can be validated offline; it never overrides a staged dataset."
+        )
+    return dataset
 
 
 def _apply_default_transforms(dataset: Any) -> None:
@@ -113,12 +144,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     resolved.save(os.path.join(run_dir, "config_resolved.yaml"))
     _attach_run_log_handler(run_dir)
 
-    dataset_cls = get_dataset(resolved.stream_spec.dataset)
-    dataset_kwargs: dict[str, Any] = {"root": resolved.stream_spec.data_root}
-    if resolved.stream_spec.dataset_num_classes is not None:
-        dataset_kwargs["num_classes"] = resolved.stream_spec.dataset_num_classes
-    train_dataset = dataset_cls(train=True, **dataset_kwargs)
-    test_dataset = dataset_cls(train=False, **dataset_kwargs)
+    train_dataset = _construct_dataset(resolved.stream_spec, train=True)
+    test_dataset = _construct_dataset(resolved.stream_spec, train=False)
     _apply_default_transforms(train_dataset)
     _apply_default_transforms(test_dataset)
     info = DatasetInfo(resolved.stream_spec.dataset, train_dataset.num_classes)

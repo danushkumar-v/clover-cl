@@ -127,10 +127,13 @@ class StreamSection:
     shuffle_seed: int = 1993
     task_size: str = "fixed"
     data_root: str = "./data"
-    #: Only set for config-only datasets (SPEC §7: ``dataset: {type:
+    #: Required for config-only datasets (SPEC §7: ``dataset: {type:
     #: image_folder, root: ..., num_classes: ...}``) whose class count
-    #: isn't a hardcoded registry constant -- ``None`` for every named
-    #: built-in, which already knows its own ``num_classes``.
+    #: isn't a hardcoded registry constant. Optional for a named built-in,
+    #: which knows its own ``num_classes`` -- there it declares the count
+    #: so a config can be *validated offline*, on a machine where that
+    #: dataset isn't staged. It never overrides a staged dataset: ``clover
+    #: run`` cross-checks it against the data it actually loads.
     dataset_num_classes: Optional[int] = None
 
     _ALLOWED_KEYS = frozenset(

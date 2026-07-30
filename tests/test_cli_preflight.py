@@ -74,3 +74,41 @@ def test_preflight_fails_on_infeasible_revisit_placement(tmp_path, capsys):
     assert exit_code == 1
     err = capsys.readouterr().err
     assert "Cannot place" in err
+
+
+def _write_unstaged_config(tmp_path, stream_extra=None):
+    stream = {
+        "dataset": "imagenet_r",
+        "init_cls": 20,
+        "increment": 20,
+        "scenario": "exact_replay",
+        "data_root": str(tmp_path / "nothing-here"),
+    }
+    stream.update(stream_extra or {})
+    config = {
+        "run": {"output_dir": str(tmp_path / "runs")},
+        "stream": stream,
+        "method": {"name": "l2p", "base_model": "vit_base_patch16_224", "pretrained": True},
+        "training": {"epochs": 5, "batch_size": 16},
+    }
+    path = tmp_path / "unstaged.yaml"
+    with open(path, "w") as fh:
+        yaml.safe_dump(config, fh)
+    return str(path)
+
+
+def test_preflight_validates_a_config_for_a_dataset_this_machine_lacks(tmp_path, capsys):
+    """Cluster configs are written on a GPU-less box that stages no real
+    dataset. Declaring the class count is what makes them checkable there,
+    instead of only discovering a typo after a job is queued."""
+    config_path = _write_unstaged_config(tmp_path, {"dataset_num_classes": 200})
+    exit_code = main(["preflight", config_path])
+    assert exit_code == 0, capsys.readouterr().err
+    assert "preflight OK" in capsys.readouterr().out
+
+
+def test_preflight_on_an_unstaged_dataset_points_at_the_offline_escape_hatch(tmp_path, capsys):
+    config_path = _write_unstaged_config(tmp_path)
+    exit_code = main(["preflight", config_path])
+    assert exit_code == 1
+    assert "stream.dataset_num_classes" in capsys.readouterr().err

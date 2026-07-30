@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from clover.config.loader import ResolvedConfig, load_yaml, resolve_config
+from clover.config.loader import (
+    ResolvedConfig,
+    load_yaml,
+    resolve_config,
+    resolve_dataset_num_classes,
+)
 from clover.config.schema import (
     MatrixSection,
     MethodSection,
@@ -16,6 +21,7 @@ __all__ = [
     "ResolvedConfig",
     "load_yaml",
     "resolve_config",
+    "resolve_dataset_num_classes",
     "RunSection",
     "StreamSection",
     "MethodSection",

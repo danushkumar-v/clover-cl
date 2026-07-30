@@ -92,3 +92,52 @@ def test_resolved_config_round_trips_through_save(tmp_path):
     assert reloaded.stream_spec.to_dict() == resolved.stream_spec.to_dict()
     assert reloaded.method_name == resolved.method_name
     assert reloaded.training.to_dict() == resolved.training.to_dict()
+
+
+# --- offline validation of an unstaged dataset (P11-A) ------------------
+
+
+def _unstaged_config(tmp_path, **stream_overrides):
+    """A config naming a real dataset that is definitely not staged here."""
+    stream = {
+        "dataset": "imagenet_r",
+        "init_cls": 20,
+        "increment": 20,
+        "data_root": str(tmp_path / "nothing-here"),
+    }
+    stream.update(stream_overrides)
+    return {"stream": stream, "method": {"name": "l2p"}, "training": {}}
+
+
+def test_declared_class_count_resolves_an_unstaged_dataset_offline(tmp_path):
+    """Resolution instantiates the dataset purely to read ``num_classes``,
+    so before this a config naming an unstaged dataset couldn't be validated
+    at all on a machine without that data -- i.e. on every GPU-less dev box,
+    which is exactly where configs get written."""
+    resolved = resolve_config(_unstaged_config(tmp_path, dataset_num_classes=200))
+    assert resolved.stream_spec.dataset == "imagenet_r"
+    assert resolved.stream_spec.dataset_num_classes == 200
+
+
+def test_unstaged_dataset_without_a_declared_count_says_how_to_validate_offline(tmp_path):
+    with pytest.raises(FileNotFoundError, match="stream.dataset_num_classes"):
+        resolve_config(_unstaged_config(tmp_path))
+
+
+def test_declaring_the_true_count_changes_nothing_when_the_data_is_present():
+    """The offline path must be inert whenever the dataset can actually be
+    constructed -- otherwise it would be a second, drifting source of truth
+    for a number that lives on the dataset class."""
+    without = resolve_config(_base_config())
+    with_declaration = resolve_config(_base_config(dataset_num_classes=20))
+    assert without.stream_spec.init_cls == with_declaration.stream_spec.init_cls
+    assert without.stream_spec.revisits == with_declaration.stream_spec.revisits
+    assert without.stream_spec.dataset == with_declaration.stream_spec.dataset
+
+
+def test_smoke_profile_drops_a_declared_count_for_the_dataset_it_replaced(tmp_path):
+    """The smoke profile substitutes the synthetic dataset wholesale, so a
+    count declared for the original one no longer describes anything."""
+    resolved = resolve_config(_unstaged_config(tmp_path, dataset_num_classes=200), smoke=True)
+    assert resolved.stream_spec.dataset == "synthetic"
+    assert resolved.stream_spec.dataset_num_classes is None

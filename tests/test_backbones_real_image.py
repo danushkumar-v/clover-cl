@@ -13,17 +13,16 @@ a real ``clover run``, only through hand-constructed unit tests that called
 first thing that actually exercises the real config -> Trainer -> method
 path with a non-default backbone.
 
-Known, documented limitation (not fixed here, out of scope for this
-phase): the prompt/adapter wrapper mechanisms (``vit_prompt_pool``,
-``vit_dual_prompt``, ``vit_coda_prompt``, ``vit_adapter*``) require their
-``base_model`` to implement CLOVER-specific hooks (``query_features``,
-``forward_tokens``/``forward(x, adapter=...)``) that a raw timm ViT
-doesn't have. ``resolve_base_model`` happily *constructs* a real timm
-model as a wrapper's base, but the wrapper's own forward pass would then
-fail (``AttributeError``) -- real timm usage is only fully wired for
-"complete backbone" methods (SimpleCIL today) that call a base's plain
-``forward(x) -> features`` with no extra hooks. Splicing prompts/prefixes/
-adapters into a real timm ViT's internals is future work, not P10's.
+P10 left one gap open, closed since by P11-A: the prompt/adapter wrapper
+mechanisms (``vit_prompt_pool``, ``vit_dual_prompt``, ``vit_coda_prompt``,
+``vit_adapter*``) require their ``base_model`` to implement CLOVER-specific
+hooks (``query_features``, ``forward_tokens``/``forward(x, adapter=...)``)
+that a raw timm ViT doesn't have, so ``resolve_base_model`` would happily
+*construct* a real timm model as a wrapper's base and then fail
+(``AttributeError``) on the wrapper's own forward pass. ``resolve_base_model``
+now wraps a timm ViT in ``clover/backbones/timm_vit.py:TimmViTHooks``, which
+supplies those hooks over timm's own submodules -- see
+``tests/test_timm_vit_hooks.py``.
 """
 
 from __future__ import annotations
@@ -66,7 +65,11 @@ def _write_config(tmp_path, fixture_root, method_cfg):
 
 def test_resolve_base_model_timm_fallback_constructs_and_runs_forward():
     model = resolve_base_model("vit_tiny_patch16_224", source="auto", in_chans=3)
-    assert model.feature_dim == model.num_features
+    # `.feature_dim` is the project-wide name (TinyViT/TinyMLP/every wrapper
+    # mechanism expose it); timm calls the same number `.num_features`. Since
+    # P11-A a ViT comes back inside TimmViTHooks, so the timm-side name lives
+    # on the wrapped base -- the two must still agree.
+    assert model.feature_dim == model.base.num_features
     out = model(torch.randn(2, 3, 224, 224))
     assert out.shape == (2, model.feature_dim)
     assert torch.isfinite(out).all()
